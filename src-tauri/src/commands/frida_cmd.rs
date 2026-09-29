@@ -33,7 +33,8 @@ pub async fn frida_forward_setup() -> Result<StepReport, String> {
         .find(|d| d.state == "device")
         .map(|d| d.serial.clone())
         .ok_or("无 device 状态设备")?;
-    forward_setup(&cfg, &adb, &serial).await
+    let info = forward_setup(&cfg, &adb, &serial).await?;
+    Ok(info.step)
 }
 
 /// 进程/应用枚举（分组：system/user）

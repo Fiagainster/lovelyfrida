@@ -29,6 +29,8 @@ pub struct SessionSnapshot {
     pub phase: SessionPhase,
     pub evidence: Vec<String>,
     pub device: Option<String>,
+    /// forward 的主机侧端口（S-06：与设备端口不一致时由探测得出）
+    pub forward_host_port: Option<u16>,
     pub target: Option<String>,
     pub session_id: Option<u64>,
     pub script_id: Option<u64>,
@@ -43,6 +45,7 @@ impl Default for SessionSnapshot {
             phase: SessionPhase::Idle,
             evidence: Vec::new(),
             device: None,
+            forward_host_port: None,
             target: None,
             session_id: None,
             script_id: None,
@@ -247,8 +250,9 @@ pub async fn server_install(cfg: &AppConfig, frida: &FridaChannelB) -> Result<Ve
     ]));
 
     // ② 清残留（幂等，S-03）
+    // pkill 自匹配陷阱：[f] 技巧让执行 shell 的命令行不命中自身
     let kill = adb
-        .shell(&serial, "su -c 'pkill -f frida-server' 2>/dev/null; echo done", Duration::from_secs(10))
+        .shell(&serial, "su -c 'pkill -f [f]rida-server; echo done'", Duration::from_secs(10))
         .await;
     steps.push(step("清理残留", "pass", vec![format!(
         "pkill 已执行（{}）",
@@ -300,24 +304,70 @@ pub async fn server_install(cfg: &AppConfig, frida: &FridaChannelB) -> Result<Ve
     Ok(steps)
 }
 
-/// 建立 adb forward 并做端到端 TCP 验证
-pub async fn forward_setup(cfg: &AppConfig, adb: &AdbBackend, serial: &str) -> Result<StepReport, String> {
-    let port = cfg.frida_port;
-    adb.run(&["-s", serial, "forward", &format!("tcp:{port}"), &format!("tcp:{port}")], Duration::from_secs(10))
-        .await
-        .map_err(|e| format!("forward 失败：{e}"))?;
-    let list = adb.run(&["-s", serial, "forward", "--list"], Duration::from_secs(10)).await?;
-    let listed = list.stdout.contains(&format!("tcp:{port}"));
-    // 端到端验证：本机 TCP 直连 127.0.0.1:port
-    let reachable = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_ok();
-    let (status, evidence) = if listed && reachable {
-        ("pass".to_string(), vec![format!("adb forward tcp:{port}→tcp:{port} 已建立并实测可连通")])
-    } else if listed {
-        ("warn".to_string(), vec![format!("forward 已登记但 127.0.0.1:{port} 连不通（frida-server 未运行？）")])
+/// 建立 adb forward 并做端到端 TCP 验证（S-06 强化：主机侧端口不可绑定时自动探测替换）。
+#[derive(Debug, Clone, Serialize)]
+pub struct ForwardInfo {
+    pub step: StepReport,
+    pub host_port: u16,
+}
+
+async fn bind_ok(port: u16) -> bool {
+    tokio::net::TcpListener::bind(("127.0.0.1", port)).await.is_ok()
+}
+
+async fn find_bindable_host_port(start: u16) -> Option<u16> {
+    // 依次扫 frida_port+1..+100、49152+、50000+（WinNAT 保留段漂移下 50000+ 通常可用）
+    let ranges: Vec<(u16, u16)> = vec![
+        (start.saturating_add(1), start.saturating_add(100)),
+        (49152, 49252),
+        (50000, 50200),
+    ];
+    for (a, b) in ranges {
+        for p in a..=b {
+            if bind_ok(p).await {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
+pub async fn forward_setup(cfg: &AppConfig, adb: &AdbBackend, serial: &str) -> Result<ForwardInfo, String> {
+    let device_port = cfg.frida_port;
+    let host_port = if bind_ok(device_port).await {
+        device_port
     } else {
-        ("fail".to_string(), vec!["forward --list 中未找到登记项".into()])
+        find_bindable_host_port(device_port)
+            .await
+            .ok_or("主机侧无可绑定端口（WinNAT 保留段覆盖过宽）：请在设置中调整 frida_port")?
     };
-    Ok(step("adb forward", &status, evidence))
+    adb.run(
+        &["-s", serial, "forward", &format!("tcp:{host_port}"), &format!("tcp:{device_port}")],
+        Duration::from_secs(10),
+    )
+    .await
+    .map_err(|e| format!("forward 失败：{e}"))?;
+    let list = adb.run(&["-s", serial, "forward", "--list"], Duration::from_secs(10)).await?;
+    let listed = list.stdout.contains(&format!("tcp:{host_port}"));
+    // 端到端验证：本机 TCP 直连主机侧端口
+    let reachable = tokio::net::TcpStream::connect(("127.0.0.1", host_port)).await.is_ok();
+    let (status, evidence): (&str, Vec<String>) = if listed && reachable {
+        (
+            "pass",
+            vec![format!(
+                "adb forward tcp:{host_port}→tcp:{device_port} 已建立并实测可连通{}",
+                if host_port != device_port { "（主机侧端口自动替换，S-06）" } else { "" }
+            )],
+        )
+    } else if listed {
+        ("warn", vec![format!("forward 已登记但 127.0.0.1:{host_port} 连不通（frida-server 未运行？）")])
+    } else {
+        ("fail", vec!["forward --list 中未找到登记项".to_string()])
+    };
+    Ok(ForwardInfo {
+        step: step("adb forward", status, evidence),
+        host_port,
+    })
 }
 
 /// 附加链路：设备就绪 → forward → attach → load core agent → 等待 hello（注入成功判据）
@@ -369,21 +419,23 @@ pub async fn attach(
     }
 
     let fwd = forward_setup(cfg, &adb, &serial).await?;
-    if fwd.status == "fail" {
+    if fwd.step.status == "fail" {
         return fail(app, state, "adb forward 建立失败").await;
     }
     {
         let mut s = state.session.lock().await;
         s.phase = SessionPhase::Forwarded;
-        s.evidence.extend(fwd.evidence.clone());
+        s.forward_host_port = Some(fwd.host_port);
+        s.evidence.extend(fwd.step.evidence.clone());
         let _ = app.emit("session-state", s.clone());
     }
 
     // 事件订阅必须在 attach 之前建立（broadcast 不回放历史）
     let mut rx = state.channel.subscribe().await?;
 
+    let host_port = state.session.lock().await.forward_host_port.unwrap_or(cfg.frida_port);
     let (session_id, script_id) =
-        attach_and_load_core(&state.channel, "127.0.0.1", cfg.frida_port, target.clone()).await?;
+        attach_and_load_core(&state.channel, "127.0.0.1", host_port, target.clone()).await?;
 
     {
         let mut s = state.session.lock().await;

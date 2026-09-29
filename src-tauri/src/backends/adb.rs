@@ -253,10 +253,13 @@ impl AdbBackend {
         self.run(&["-s", serial, "push", local, remote], timeout).await
     }
 
-    /// 幂等清理：先清残留再建立（文档07：跑第二次就坏 = 不允许）。M1 起用于 frida-server。
+    /// 幂等清理：先清残留再建立（文档07：跑第二次就坏 = 不允许）。
+    /// pkill -f 自匹配陷阱：模式写成 [f]xxx 使执行 shell 的命令行不命中自身。
     #[allow(dead_code)] // M1 会话链路启用
     pub async fn pkill_residue(&self, serial: &str, process_name: &str) -> Result<ProcOutput, String> {
-        let cmd = format!("su -c 'pkill -f {process_name}' 2>/dev/null; echo done");
+        let head = process_name.chars().next().map(String::from).unwrap_or_default();
+        let pattern = format!("[{head}]{}", &process_name[head.len()..]);
+        let cmd = format!("su -c 'pkill -f {pattern}; echo done'");
         self.shell(serial, &cmd, Duration::from_secs(10)).await
     }
 }
