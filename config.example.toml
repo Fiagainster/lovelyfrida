@@ -1,0 +1,46 @@
+# LovelyFrida 配置样例：复制为 config.toml 后按需修改。
+# 运行期 config.toml 不入库（含本机路径）；全部字段有默认值，缺字段自动补全（文档07）。
+
+# 工作区根（唯一可写区；禁止写在系统盘 C:）。留空 = <项目根>/workspace
+workspace_root = ""
+
+# 归档根（cases 永不随工作区清理）。留空 = <项目根>/cases
+cases_root = ""
+
+# adb 路径。留空 = 自动探测（设置-自定义路径 → 模拟器自带 → bin\adb → PATH，E-04）
+adb_path = ""
+
+# Frida 通道：auto（当前先 B）| a（Rust crate，M2+）| b（Python sidecar，主通道）| c（CLI 兜底）
+preferred_channel = "auto"
+
+# frida 端口（被本机占用时 forward 自动换备用端口，S-06）
+frida_port = 27042
+
+# adb connect 硬超时秒数（E-02 硬约束，默认 15，范围 1~60）
+adb_connect_timeout_s = 15
+
+# 检材只读根：对这些路径的写入在打开文件描述符之前就被拒绝（文档07 只读第一原则）
+read_only_roots = [
+  # "D:\\evidence\\case-001",
+]
+
+# 日志脱敏（关闭时日志含明文凭据，界面会显式提示）
+mask_secrets_in_logs = true
+
+# L3 原始日志环形缓冲行数
+retain_raw_log_lines = 50000
+
+[ui]
+theme = "dark"          # dark | light
+language = "zh-CN"
+nav_expanded = true
+
+[doctor]
+# 启动时自动跑一次「快速体检」（<2s；深度连接动作始终由深度体检兜底）
+auto_run_on_startup = false
+# 模拟器 adb 端口候选（深度体检按此列表连接；MuMu 12 默认 16384/16385/7555）
+emulator_ports = [16384, 16385, 7555]
+# 自定义 adb 候选路径（优先于自动扫描）
+adb_extra_paths = []
+# 深度体检 connect 超时秒数
+deep_connect_timeout_s = 15

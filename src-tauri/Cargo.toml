@@ -1,0 +1,41 @@
+[package]
+name = "lovelyfrida"
+version = "0.1.0"
+description = "GUI 化的 Frida 动态调试工具"
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "lovelyfrida_lib"
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "process",
+    "time",
+    "sync",
+    "fs",
+    "io-util",
+    "net",
+] }
+toml = "0.8"
+rusqlite = { version = "0.32", features = ["bundled"] }
+sha2 = "0.10"
+chrono = { version = "0.4", features = ["serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+fs2 = "0.4"
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1

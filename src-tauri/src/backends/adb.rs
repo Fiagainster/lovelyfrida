@@ -1,0 +1,371 @@
+use serde::Serialize;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+/// 进程输出（三层事件的 L3 原料；Doctor 用于产生证据）。
+#[derive(Debug, Clone, Serialize)]
+pub struct ProcOutput {
+    pub code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+    pub timed_out: bool,
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AdbDevice {
+    pub serial: String,
+    pub state: String,
+    pub model: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AdbCandidate {
+    pub path: String,
+    pub exists: bool,
+    pub chosen: bool,
+    pub source: String,
+}
+
+/// 连接报告：把「试过什么、每步结果」全量带回 UI（U1：失败列出试过端口与结果）。
+#[derive(Debug, Clone, Serialize)]
+pub struct ConnectReport {
+    pub ok: bool,
+    pub serial: String,
+    pub state: String,
+    pub attempts: u32,
+    pub evidence: Vec<String>,
+    pub elapsed_ms: u64,
+}
+
+pub struct AdbBackend {
+    adb: PathBuf,
+    pub source: String,
+    pub candidates: Vec<AdbCandidate>,
+}
+
+impl AdbBackend {
+    /// adb 解析顺序（E-04：模拟器自带优先）：config > env > 用户自定义 > MuMu 扫描 > bin\adb > PATH。
+    pub async fn detect(configured: &str, extra_paths: &[String]) -> Result<Self, String> {
+        let mut candidates: Vec<AdbCandidate> = Vec::new();
+
+        let configured = configured.trim();
+        if !configured.is_empty() {
+            candidates.push(AdbCandidate {
+                path: configured.to_string(),
+                exists: Path::new(configured).is_file(),
+                chosen: false,
+                source: "config.toml".into(),
+            });
+        }
+        if let Ok(env_path) = std::env::var("LOVELYFRIDA_MUMU_ADB") {
+            if !env_path.trim().is_empty() {
+                candidates.push(AdbCandidate {
+                    path: env_path.trim().to_string(),
+                    exists: Path::new(env_path.trim()).is_file(),
+                    chosen: false,
+                    source: "env LOVELYFRIDA_MUMU_ADB".into(),
+                });
+            }
+        }
+        for p in extra_paths {
+            let t = p.trim();
+            if t.is_empty() {
+                continue;
+            }
+            candidates.push(AdbCandidate {
+                path: t.to_string(),
+                exists: Path::new(t).is_file(),
+                chosen: false,
+                source: "设置·自定义 adb".into(),
+            });
+        }
+        for p in scan_mumu_adb() {
+            candidates.push(AdbCandidate {
+                path: p.display().to_string(),
+                exists: true,
+                chosen: false,
+                source: "MuMu 安装目录扫描".into(),
+            });
+        }
+        let bundled = crate::paths::bundled_adb_path();
+        candidates.push(AdbCandidate {
+            path: bundled.display().to_string(),
+            exists: bundled.is_file(),
+            chosen: false,
+            source: "bin\\adb（随包）".into(),
+        });
+
+        // PATH 兜底：`adb` 能执行即可（放在最后）
+        if !candidates.iter().any(|c| c.exists) {
+            if let Ok(o) = run_raw(Path::new("adb"), &["version"], Duration::from_secs(5)).await {
+                if !o.timed_out && o.stdout.contains("Android Debug Bridge") {
+                    candidates.push(AdbCandidate {
+                        path: "adb".into(),
+                        exists: true,
+                        chosen: false,
+                        source: "PATH".into(),
+                    });
+                }
+            }
+        }
+
+        let chosen = candidates
+            .iter_mut()
+            .find(|c| c.exists)
+            .ok_or("未找到可用 adb（config/env/MuMu/bin 均缺失，PATH 亦未验证通过）")?;
+
+        chosen.chosen = true;
+        let adb = PathBuf::from(&chosen.path);
+        let source = chosen.source.clone();
+
+        // 可用性验证：真的能跑起来
+        let out = run_raw(&adb, &["version"], Duration::from_secs(5)).await?;
+        if out.timed_out || !out.stdout.contains("Android Debug Bridge") {
+            return Err(format!(
+                "adb 存在但无法执行：{}（{}）",
+                adb.display(),
+                out.stderr.trim()
+            ));
+        }
+
+        Ok(Self {
+            adb,
+            source,
+            candidates,
+        })
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.adb
+    }
+
+    /// 带超时执行 adb 子命令（超时强杀子进程，不留悬挂句柄）。
+    pub async fn run(&self, args: &[&str], timeout: Duration) -> Result<ProcOutput, String> {
+        run_raw(&self.adb, args, timeout).await
+    }
+
+    /// adb devices -l 解析。
+    pub async fn devices(&self) -> Result<Vec<AdbDevice>, String> {
+        let out = self.run(&["devices", "-l"], Duration::from_secs(10)).await?;
+        Ok(parse_devices(&out.stdout))
+    }
+
+    /// 单次 connect：15s 硬超时（E-02），成功后必须二次 `adb devices` 实测状态（S-05 假绿灯防护）。
+    pub async fn connect(&self, host: &str, port: u16, timeout_s: u64) -> ConnectReport {
+        let t0 = std::time::Instant::now();
+        let serial = format!("{host}:{port}");
+        let mut evidence = vec![format!("$ adb connect {serial}（超时 {timeout_s}s，E-02 硬约束）")];
+        let dur = Duration::from_secs(timeout_s.max(1));
+
+        let out = self
+            .run(&["connect", &serial], dur)
+            .await
+            .unwrap_or(ProcOutput {
+                code: None,
+                stdout: String::new(),
+                stderr: "adb 执行失败".into(),
+                timed_out: true,
+                duration_ms: 0,
+            });
+        if out.timed_out {
+            evidence.push(format!(
+                "✖ 超时（{}ms）——非 adbd 端口 connect 会无限挂死，这是 E-02 的典型形态",
+                out.duration_ms
+            ));
+            return ConnectReport {
+                ok: false,
+                serial,
+                state: "timeout".into(),
+                attempts: 1,
+                evidence,
+                elapsed_ms: t0.elapsed().as_millis() as u64,
+            };
+        }
+        let text = format!("{}{}", out.stdout.trim(), out.stderr.trim());
+        evidence.push(text.clone());
+
+        // 二次确认（S-05）：独立跑 devices，看 serial 的真实状态
+        let devices = self.devices().await.unwrap_or_default();
+        let matched = devices.iter().find(|d| d.serial == serial);
+        let state = matched.map(|d| d.state.clone()).unwrap_or_else(|| "missing".into());
+        evidence.push(format!("二次确认：adb devices → {serial} = {state}"));
+
+        let ok = state == "device";
+        if !ok {
+            evidence.push(
+                "✖ 假绿灯防护：connect 命令成功 ≠ 实测可通信，以 devices 状态为准（S-05）".into(),
+            );
+        }
+        ConnectReport {
+            ok,
+            serial,
+            state,
+            attempts: 1,
+            evidence,
+            elapsed_ms: t0.elapsed().as_millis() as u64,
+        }
+    }
+
+    /// offline 自愈曲线（E-03）：disconnect → 2s → connect，×5。
+    pub async fn self_heal(&self, host: &str, port: u16, timeout_s: u64) -> ConnectReport {
+        let t0 = std::time::Instant::now();
+        let serial = format!("{host}:{port}");
+        let mut evidence = vec![format!("进入 offline 自愈曲线（E-03）：{serial}")];
+        for i in 1..=5u32 {
+            evidence.push(format!("— 第 {i}/5 轮 —"));
+            let _ = self.run(&["disconnect", &serial], Duration::from_secs(5)).await;
+            evidence.push(format!("  disconnect {serial} 完成"));
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            let rep = self.connect(host, port, timeout_s).await;
+            for e in &rep.evidence {
+                evidence.push(format!("  {e}"));
+            }
+            if rep.ok {
+                return ConnectReport {
+                    ok: true,
+                    serial,
+                    state: rep.state,
+                    attempts: i,
+                    evidence,
+                    elapsed_ms: t0.elapsed().as_millis() as u64,
+                };
+            }
+        }
+        evidence.push("✖ 5 轮自愈未恢复：设备多半未在运行，或该端口不是 adbd（先启动模拟器）".into());
+        ConnectReport {
+            ok: false,
+            serial,
+            state: "offline".into(),
+            attempts: 5,
+            evidence,
+            elapsed_ms: t0.elapsed().as_millis() as u64,
+        }
+    }
+
+    /// 设备 shell（su 通道在调用方组合）。
+    pub async fn shell(&self, serial: &str, cmd: &str, timeout: Duration) -> Result<ProcOutput, String> {
+        self.run(&["-s", serial, "shell", cmd], timeout).await
+    }
+
+    #[allow(dead_code)] // M1 数据回灌启用
+    pub async fn push(&self, serial: &str, local: &str, remote: &str, timeout: Duration) -> Result<ProcOutput, String> {
+        self.run(&["-s", serial, "push", local, remote], timeout).await
+    }
+
+    /// 幂等清理：先清残留再建立（文档07：跑第二次就坏 = 不允许）。M1 起用于 frida-server。
+    #[allow(dead_code)] // M1 会话链路启用
+    pub async fn pkill_residue(&self, serial: &str, process_name: &str) -> Result<ProcOutput, String> {
+        let cmd = format!("su -c 'pkill -f {process_name}' 2>/dev/null; echo done");
+        self.shell(serial, &cmd, Duration::from_secs(10)).await
+    }
+}
+
+/// 创建不弹控制台窗口的子进程命令（Windows 下 CREATE_NO_WINDOW）。
+pub fn quiet_command(program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new(program);
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000);
+    cmd
+}
+
+/// 无状态裸执行（detect 阶段还没有 backend 实例时使用）。
+pub async fn run_raw(adb: &Path, args: &[&str], timeout: Duration) -> Result<ProcOutput, String> {
+    let t0 = std::time::Instant::now();
+    let mut cmd = quiet_command(adb);
+    cmd.args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true);
+    let child = cmd.spawn().map_err(|e| format!("spawn adb 失败: {e}"))?;
+    let result = tokio::time::timeout(timeout, child.wait_with_output()).await;
+    let duration_ms = t0.elapsed().as_millis() as u64;
+    match result {
+        Ok(Ok(out)) => Ok(ProcOutput {
+            code: out.status.code(),
+            stdout: String::from_utf8_lossy(&out.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&out.stderr).to_string(),
+            timed_out: false,
+            duration_ms,
+        }),
+        Ok(Err(e)) => Err(format!("adb 执行失败: {e}")),
+        Err(_) => {
+            // 超时：future 被 drop 时 kill_on_drop(true) 已兜底杀掉子进程
+            Ok(ProcOutput {
+                code: None,
+                stdout: String::new(),
+                stderr: format!("超时（{}ms）", duration_ms),
+                timed_out: true,
+                duration_ms,
+            })
+        }
+    }
+}
+
+pub fn parse_devices(stdout: &str) -> Vec<AdbDevice> {
+    let mut out = Vec::new();
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty()
+            || line.starts_with("List of devices")
+            || line.starts_with('*')
+            || line.starts_with("adb")
+        {
+            continue;
+        }
+        let mut it = line.split_whitespace();
+        let (Some(serial), Some(state)) = (it.next(), it.next()) else {
+            continue;
+        };
+        let model = it
+            .find_map(|t| t.strip_prefix("model:"))
+            .map(|s| s.to_string());
+        out.push(AdbDevice {
+            serial: serial.to_string(),
+            state: state.to_string(),
+            model,
+        });
+    }
+    out
+}
+
+/// 扫描常见 MuMu 安装位置（含本机实际布局 D:\System\MuMu\MuMuPlayer\nx_main\adb.exe）。
+fn scan_mumu_adb() -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let drives = ["C:", "D:", "E:"];
+    let roots: Vec<PathBuf> = drives
+        .iter()
+        .flat_map(|d| {
+            [
+                PathBuf::from(format!("{d}/Program Files/Netease")),
+                PathBuf::from(format!("{d}/Program Files (x86)/Netease")),
+                PathBuf::from(format!("{d}/System/MuMu")),
+            ]
+        })
+        .collect();
+    for root in roots {
+        let Ok(entries) = std::fs::read_dir(&root) else {
+            continue;
+        };
+        for e in entries.flatten() {
+            let dir = e.path();
+            if !dir.is_dir() {
+                continue;
+            }
+            let name = dir.file_name().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default();
+            if !name.contains("mumu") {
+                continue;
+            }
+            for rel in ["shell/adb.exe", "nx_main/adb.exe"] {
+                let cand = dir.join(rel);
+                if cand.is_file() {
+                    found.push(cand);
+                }
+            }
+        }
+    }
+    found.sort();
+    found.dedup();
+    found
+}

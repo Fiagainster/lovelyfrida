@@ -1,0 +1,41 @@
+# ===== 依赖与构建产物 =====
+node_modules/
+dist/
+src-tauri/target/
+*.log
+
+# ===== 随包二进制（不入库：体积大；按 bin/binary_manifest.json 的 sha256 供给） =====
+bin/adb/
+bin/frida-server/
+bin/*.zip
+
+# ===== 运行时数据（文档06：workspace 可弃、cases 不可弃，但都不进代码库；交接走案卷包） =====
+workspace/
+cases/
+cases.db
+cases.db-wal
+cases.db-shm
+logs/
+config.toml
+src-tauri/tauri.dev.conf.json
+
+# ===== 第三方参考仓库（体量大、非本项目代码） =====
+参考/
+
+# ===== Python =====
+__pycache__/
+*.pyc
+.venv/
+
+# ===== IDE / 系统 =====
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+.DS_Store
+
+# ===== ZCode 会话内部文件 =====
+.zcode/
+
+# ===== Tauri 构建时自动生成 =====
+src-tauri/gen/

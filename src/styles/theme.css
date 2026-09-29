@@ -1,0 +1,185 @@
+/* ============ LovelyFrida 主题 token ============
+ * 结构参照 LovelyMem：base（主题无关）+ dark/light（只覆盖色彩变量）。
+ * 纪律（文档03）：状态色两主题语义一致，只调明度不改色相；
+ * 终端默认深色；差分矩阵高亮色不随主题（M3 定义）。
+ */
+
+:root {
+  --titlebar-h: 44px;
+  --statusbar-h: 30px;
+  --nav-w: 240px;
+  --nav-w-collapsed: 52px;
+  --sidepanel-w: 320px;
+
+  --font-ui: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "Cascadia Mono", Consolas, "Courier New", monospace;
+
+  --radius-sm: 5px;
+  --radius-md: 9px;
+  --radius-lg: 14px;
+
+  --trans-fast: 0.14s ease;
+  --trans-slow: 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+
+  --grad-accent: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+  --grad-accent-soft: linear-gradient(135deg, rgba(59, 130, 246, 0.16), rgba(139, 92, 246, 0.16));
+}
+
+/* ---------- 深色（默认） ---------- */
+:root[data-theme="dark"] {
+  --bg-base: #0d1117;
+  --bg-panel: #151b23;
+  --bg-elevated: #1b232d;
+  --bg-hover: rgba(255, 255, 255, 0.055);
+  --bg-input: #0a0e13;
+  --bg-titlebar: #0a0d12;
+  --bg-statusbar: #0a0d12;
+
+  --text-1: #e9edf3;
+  --text-2: #a8b3bf;
+  --text-3: #66707d;
+
+  --border-1: #232b35;
+  --border-2: #313b47;
+
+  --accent: #4d8dff;
+  --accent-soft: rgba(77, 141, 255, 0.14);
+
+  --shadow-1: 0 1px 3px rgba(0, 0, 0, 0.35);
+  --shadow-2: 0 8px 28px rgba(0, 0, 0, 0.45);
+
+  /* 六态状态色（语义全场统一） */
+  --st-pending: #6b7684;
+  --st-running: #4d8dff;
+  --st-pass: #34d399;
+  --st-warn: #fbbf24;
+  --st-fail: #f87171;
+  --st-skip: #556070;
+  /* 状态色 12% 透明度底（色块用） */
+  --st-pass-soft: rgba(52, 211, 153, 0.12);
+  --st-warn-soft: rgba(251, 191, 36, 0.12);
+  --st-fail-soft: rgba(248, 113, 113, 0.12);
+  --st-skip-soft: rgba(85, 96, 112, 0.16);
+  --st-running-soft: rgba(77, 141, 255, 0.12);
+  --st-pending-soft: rgba(107, 118, 132, 0.12);
+}
+
+/* ---------- 浅色 ---------- */
+:root[data-theme="light"] {
+  --bg-base: #f3f5f8;
+  --bg-panel: #ffffff;
+  --bg-elevated: #f8fafc;
+  --bg-hover: rgba(15, 23, 42, 0.045);
+  --bg-input: #ffffff;
+  --bg-titlebar: #ffffff;
+  --bg-statusbar: #f6f8fa;
+
+  --text-1: #17202c;
+  --text-2: #4d5766;
+  --text-3: #8c96a5;
+
+  --border-1: #e2e7ee;
+  --border-2: #cbd4e0;
+
+  --accent: #2563eb;
+  --accent-soft: rgba(37, 99, 235, 0.09);
+
+  --shadow-1: 0 1px 3px rgba(23, 32, 44, 0.08);
+  --shadow-2: 0 10px 30px rgba(23, 32, 44, 0.14);
+
+  /* 同色相，仅调明度 */
+  --st-pending: #94a0af;
+  --st-running: #2563eb;
+  --st-pass: #059669;
+  --st-warn: #b45309;
+  --st-fail: #dc2626;
+  --st-skip: #a6b0bd;
+  --st-pass-soft: rgba(5, 150, 105, 0.09);
+  --st-warn-soft: rgba(180, 83, 9, 0.09);
+  --st-fail-soft: rgba(220, 38, 38, 0.08);
+  --st-skip-soft: rgba(166, 176, 189, 0.14);
+  --st-running-soft: rgba(37, 99, 235, 0.09);
+  --st-pending-soft: rgba(148, 160, 175, 0.12);
+}
+
+/* ---------- 基础 ---------- */
+* {
+  box-sizing: border-box;
+}
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+body {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--text-1);
+  background: var(--bg-base);
+  -webkit-font-smoothing: antialiased;
+}
+.mono {
+  font-family: var(--font-mono);
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-2);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-3);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 状态灯脉冲动画 */
+@keyframes pulse-ring {
+  0% {
+    box-shadow: 0 0 0 0 var(--st-running-soft);
+  }
+  70% {
+    box-shadow: 0 0 0 7px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+.status-light--running .status-light__dot {
+  animation: pulse-ring 1.5s infinite;
+}
+
+/* 通用卡片 */
+.card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-md);
+}
+
+/* 渐变主按钮（naive primary 的皮肤增强） */
+.btn-hero {
+  background: var(--grad-accent) !important;
+  border: none !important;
+  color: #fff !important;
+  box-shadow: 0 2px 10px rgba(80, 120, 255, 0.35);
+  transition: filter var(--trans-fast), transform var(--trans-fast);
+}
+.btn-hero:hover {
+  filter: brightness(1.1);
+}
+.btn-hero:active {
+  transform: translateY(1px);
+}

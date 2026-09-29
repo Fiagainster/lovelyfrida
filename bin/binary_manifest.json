@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "description": "LovelyFrida 内置二进制清单（文档07 供应链要求，首启自检按此对账 sha256）",
+  "files": [
+    {
+      "path": "adb/windows-x64/adb.exe",
+      "name": "adb",
+      "version": "1.0.41",
+      "source": "Android SDK platform-tools（google 官方分发）",
+      "sha256": "56656270da132f44e9cb4fb86a12ba965635c80423d43dcdd944d9fec4ab4622"
+    },
+    {
+      "path": "adb/windows-x64/AdbWinApi.dll",
+      "name": "AdbWinApi",
+      "version": "1.0.41",
+      "source": "Android SDK platform-tools",
+      "sha256": "a00cf631dd12c82561ffccefdb1a99a27c527253b04f06ca8fc1bb86ba2148c4"
+    },
+    {
+      "path": "adb/windows-x64/AdbWinUsbApi.dll",
+      "name": "AdbWinUsbApi",
+      "version": "1.0.41",
+      "source": "Android SDK platform-tools",
+      "sha256": "e4d72d5ba3bf4b027f1b7a3781aae0b04712c1a52244bea277fb57dd75a85702"
+    },
+    {
+      "path": "frida-server/17.19.0/android-arm/frida-server",
+      "name": "frida-server",
+      "version": "17.19.0",
+      "abi": "arm",
+      "source": "github.com/frida/frida/releases/tag/17.19.0（用户手动下载）",
+      "sha256": "630fec63fc6d08c5e65e44ab3f7508b6c01602e9a7dbda9030e55d4cc29ac34e"
+    },
+    {
+      "path": "frida-server/17.19.0/android-arm64/frida-server",
+      "name": "frida-server",
+      "version": "17.19.0",
+      "abi": "arm64",
+      "source": "github.com/frida/frida/releases/tag/17.19.0（用户手动下载）",
+      "sha256": "5e048e8be17c8e1300a882887dc3090137eefbdc56939f9402fbc4c1b9732ae9"
+    },
+    {
+      "path": "frida-server/17.19.0/android-x86/frida-server",
+      "name": "frida-server",
+      "version": "17.19.0",
+      "abi": "x86",
+      "source": "github.com/frida/frida/releases/tag/17.19.0（用户手动下载）",
+      "sha256": "c402b760fc106df0171fcd912ab852f5351ac891d2a6d2b6719eb2b9b7295de7"
+    },
+    {
+      "path": "frida-server/17.19.0/android-x86_64/frida-server",
+      "name": "frida-server",
+      "version": "17.19.0",
+      "abi": "x86_64",
+      "source": "github.com/frida/frida/releases/tag/17.19.0（用户手动下载）",
+      "sha256": "e6f7e35901db8e83d40088d51692afa77bd23c8ae69e521c3e5955f741a7b9d6"
+    }
+  ],
+  "pending": [
+    {
+      "path": "frida-server/16.7.19/<abi>/frida-server",
+      "milestone": "按需（16.x 客户端兼容矩阵）"
+    }
+  ]
+}
