@@ -107,6 +107,7 @@ frida-server 从 [github.com/frida/frida/releases](https://github.com/frida/frid
 | 云端上传、遥测、多机并行 | 案件数据不出本机；`config.toml` 里没有 telemetry 这个开关 |
 | 替代 jadx 等静态工具 | 它是**静态分析的下游**：静态告诉你「有个 `hashPassword`」，动态告诉它「到底吃什么参数」 |
 | 打包成 Web 服务 | 动态分析的本质是本地进程控制；浏览器化只会引入一层无用的不确定 |
+| **接入 AI / LLM** | 工具的价值 = 业务与能力的封装本身。需要 AI 的人直接用 frida 命令行即可；本工具把「每一步可见、可下钻、可重放」做到位，不在此之上再叠一层黑盒 |
 
 ## 八、一句话记住设计取向
 

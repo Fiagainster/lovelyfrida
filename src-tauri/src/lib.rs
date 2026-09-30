@@ -40,6 +40,7 @@ pub fn run() {
         .manage(services::session::FridaState::new(sidecar_python))
         .manage(services::terminal::TerminalMgr::default())
         .manage(services::recorder::RecorderState::default())
+        .manage(services::trace::TraceState::default())
         .invoke_handler(tauri::generate_handler![
             commands::app_cmd::get_app_info,
             commands::app_cmd::confirm_close,
@@ -60,6 +61,7 @@ pub fn run() {
             commands::frida_cmd::frida_session_detach,
             commands::frida_cmd::frida_session_status,
             commands::frida_cmd::frida_session_ping,
+            commands::frida_cmd::frida_rpc,
             commands::terminal_cmd::terminal_create,
             commands::terminal_cmd::terminal_write,
             commands::terminal_cmd::terminal_resize,
@@ -97,8 +99,10 @@ pub fn run() {
             // sidecar 事件 → 前端转发（message/detached/device_lost/spawn_added）
             let ev_handle = app.handle().clone();
             let frida = app.state::<services::session::FridaState>().channel.clone();
+            let trace = std::sync::Arc::new(services::trace::TraceState::default());
+            app.manage(trace.clone());
             tauri::async_runtime::spawn(async move {
-                services::session::forward_events(ev_handle, frida).await;
+                services::session::forward_events(ev_handle, frida, trace).await;
             });
 
             tauri::async_runtime::spawn(async move {

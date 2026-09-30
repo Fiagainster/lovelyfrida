@@ -242,9 +242,43 @@ export const api = {
     invoke<void>("terminal_resize", { id, cols, rows }),
   terminalClose: (id: number) => invoke<void>("terminal_close", { id }),
 
-  // Recorder
+  // M2：agent RPC（探索器/探针/内存/REPL）
+  fridaRpc: (f: string, args: unknown[]) => invoke<unknown>("frida_rpc", { f, args }),
+
+    // Recorder
   recorderList: () => invoke<RecordedStep[]>("recorder_list"),
   recorderExport: (format: "ps1" | "sh" | "md" | "json") =>
     invoke<ExportResult>("recorder_export", { format }),
   recorderClear: () => invoke<void>("recorder_clear"),
 };
+
+// ---------- M2：探针 / trace ----------
+
+/** 探针声明（对应 agent ProbeDecl） */
+export interface ProbeDecl {
+  id: string;
+  clazz: string;
+  method: string;
+  maxLen?: number;
+  captureRet?: boolean;
+  backtrace?: boolean;
+  condition?: string;
+}
+
+export interface ProbeStat {
+  id: string;
+  clazz: string;
+  method: string;
+  status: "active" | "waiting" | "error";
+  hits: number;
+  errors: number;
+  lastError: string | null;
+}
+
+/** trace 事件（Rust TraceRecord） */
+export interface TraceRecord {
+  seq: number;
+  wall: string;
+  run_id: string;
+  payload: Record<string, unknown>;
+}

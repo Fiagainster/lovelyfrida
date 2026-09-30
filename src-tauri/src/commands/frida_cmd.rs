@@ -126,3 +126,27 @@ pub async fn frida_session_status(
 pub async fn frida_session_ping(state: tauri::State<'_, FridaState>) -> Result<serde_json::Value, String> {
     ping(&state).await
 }
+
+/// 通用 RPC：调用 agent 的 rpc.exports 方法（探索器/探针/内存/REPL 全走这里）
+#[tauri::command]
+pub async fn frida_rpc(
+    state: tauri::State<'_, FridaState>,
+    f: String,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let s = state.session.lock().await;
+    let Some(script_id) = s.script_id else {
+        return Err("无活动脚本会话：先附加目标".into());
+    };
+    drop(s);
+    let v = state
+        .channel
+        .call(
+            "rpc_call",
+            serde_json::json!({"script_id": script_id, "fn": f, "args": args}),
+        )
+        .await?;
+    v.get("result")
+        .cloned()
+        .ok_or_else(|| "rpc 无返回值".to_string())
+}

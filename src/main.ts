@@ -25,9 +25,20 @@ app.use(pinia);
 
 // 开发模式暴露 store 调试钩子（浏览器预览时注入 mock 数据自测 UI）
 if (import.meta.env.DEV) {
-  import("@/stores/pipeline").then(({ usePipelineStore }) => {
-    (window as unknown as Record<string, unknown>).__pipeline = usePipelineStore(pinia);
-  });
+  (window as unknown as Record<string, unknown>).__storesReady = (async () => {
+    const { usePipelineStore } = await import("@/stores/pipeline");
+    const { useSessionStore } = await import("@/stores/session");
+    const { useProbeStore } = await import("@/stores/probe");
+    const { useAppStore } = await import("@/stores/app");
+    const stores = {
+      pipeline: usePipelineStore(pinia),
+      session: useSessionStore(pinia),
+      probe: useProbeStore(pinia),
+      app: useAppStore(pinia),
+    };
+    Object.assign(window as unknown as Record<string, unknown>, { __pipeline: stores.pipeline, __session: stores.session, __probe: stores.probe, __app: stores.app, __stores: stores });
+    return stores;
+  })();
 }
 
 app.config.errorHandler = (err, _instance, info) => showFatal(`vue(${info})`, err);

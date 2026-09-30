@@ -21,6 +21,7 @@ import StatusLight from "@/components/StatusLight.vue";
 import CheckItem from "@/components/CheckItem.vue";
 import SessionConsole from "@/components/SessionConsole.vue";
 import RecorderCard from "@/components/RecorderCard.vue";
+import ProbeConsole from "@/components/ProbeConsole.vue";
 
 /** 主视图：流水线（M0 = 环境体检 + 设备连接两个节点可用） */
 const pipeline = usePipelineStore();
@@ -301,6 +302,22 @@ onMounted(() => {
 
       <!-- ============ 操作记录（Recorder v1） ============ -->
       <RecorderCard />
+    </template>
+
+    <!-- ============ 节点5：探针注入（M2） ============ -->
+    <template v-else-if="activeNode === 'probe'">
+      <div class="view-head">
+        <div class="view-head__title">
+          <div class="view-head__icon"><GitNetworkOutline size="18" /></div>
+          <div>
+            <h2>探针注入</h2>
+            <div class="view-head__sub">
+              填表挂钩（零行 JS）· 探索器找目标 · REPL 直接求值 · 命中进时间轴
+            </div>
+          </div>
+        </div>
+      </div>
+      <ProbeConsole />
     </template>
 
     <!-- ============ 其余节点：里程碑占位 ============ -->

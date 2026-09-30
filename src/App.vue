@@ -12,6 +12,7 @@ import { useAppStore, VIEW_DEFS, type ViewKey } from "@/stores/app";
 import { usePipelineStore } from "@/stores/pipeline";
 import { useSessionStore } from "@/stores/session";
 import { useTerminalStore } from "@/stores/terminal";
+import { useProbeStore } from "@/stores/probe";
 import { useSettingsStore } from "@/stores/settings";
 import { api } from "@/api";
 import { isTauri } from "@/utils/env";
@@ -22,6 +23,7 @@ import CommandPalette from "@/components/CommandPalette.vue";
 import SettingsModal from "@/components/SettingsModal.vue";
 import TerminalDrawer from "@/components/TerminalDrawer.vue";
 import PipelineView from "@/views/PipelineView.vue";
+import TimelineView from "@/views/TimelineView.vue";
 import PlaceholderView from "@/views/PlaceholderView.vue";
 
 const app = useAppStore();
@@ -29,10 +31,13 @@ const pipeline = usePipelineStore();
 const settings = useSettingsStore();
 const sessionStore = useSessionStore();
 const terminalStore = useTerminalStore();
+const probeStore = useProbeStore();
 
-const activeComponent = computed(() =>
-  app.activeView === "pipeline" ? PipelineView : PlaceholderView,
-);
+const activeComponent = computed(() => {
+  if (app.activeView === "pipeline") return PipelineView;
+  if (app.activeView === "timeline") return TimelineView;
+  return PlaceholderView;
+});
 
 async function doConfirmClose() {
   app.closeDialogOpen = false;
@@ -75,6 +80,7 @@ onMounted(() => {
     import("@tauri-apps/api/event").then(({ listen }) => {
       void sessionStore.bindEvents(listen);
       void terminalStore.bindEvents(listen);
+      void probeStore.bindEvents(listen);
     });
   }
 });

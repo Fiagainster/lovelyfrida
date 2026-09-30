@@ -1,0 +1,18 @@
+{
+  "name": "lovelyfrida-agent",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --platform=neutral --format=iife --outfile=dist/core.js --charset=utf8",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "buffer": "^6.0.3",
+    "frida-java-bridge": "^7.0.13"
+  },
+  "devDependencies": {
+    "@types/frida-gum": "^19.11.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.9.2"
+  }
+}

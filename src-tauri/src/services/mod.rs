@@ -5,3 +5,4 @@ pub mod first_run;
 pub mod recorder;
 pub mod session;
 pub mod terminal;
+pub mod trace;

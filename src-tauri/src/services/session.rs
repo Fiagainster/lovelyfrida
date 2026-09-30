@@ -5,7 +5,7 @@ use crate::backends::frida::{attach_and_load_core, FridaChannelB, FridaEvent};
 use crate::config::AppConfig;
 use serde::Serialize;
 use serde_json::{json, Value};
-use tauri::Emitter;
+use tauri::{Emitter, Manager, State};
 use std::time::Duration;
 use tokio::sync::Mutex;
 
@@ -475,8 +475,11 @@ pub async fn attach(
                                     payload.as_ref().and_then(|p| p.get("java")).and_then(|v| v.as_str()),
                                 ));
                                 s.updated_at = chrono::Local::now().format("%H:%M:%S%.3f").to_string();
+                                s.evidence.push("trace run 已开启".into());
                                 let snap = s.clone();
                                 let _ = app.emit("session-state", snap.clone());
+                                let trace: State<std::sync::Arc<crate::services::trace::TraceState>> = app.state();
+                                trace.start(&snap.target.clone().unwrap_or_default());
                                 crate::audit::audit(
                                     "session_attach",
                                     snap.target.as_deref().unwrap_or(""),
@@ -525,6 +528,12 @@ pub async fn detach(app: &tauri::AppHandle, state: &FridaState) -> Result<Sessio
     s.script_id = None;
     s.hello = None;
     s.evidence.push("已分离（脚本卸载 + 会话 detach）".into());
+    {
+        let trace: State<std::sync::Arc<crate::services::trace::TraceState>> = app.state();
+        if let Some(rid) = trace.stop() {
+            s.evidence.push(format!("trace run {rid} 已落盘"));
+        }
+    }
     if !errors.is_empty() {
         s.evidence.extend(errors);
     }
@@ -550,14 +559,21 @@ pub async fn ping(state: &FridaState) -> Result<Value, String> {
     Ok(json!({"posted": true}))
 }
 
-/// 供 lib.rs 启动时挂的全局事件转发（sidecar → 前端）
-pub async fn forward_events(handle: tauri::AppHandle, frida: FridaChannelB) {
+/// 供 lib.rs 启动时挂的全局事件转发（sidecar → 前端 + trace 管线）
+pub async fn forward_events(
+    handle: tauri::AppHandle,
+    frida: FridaChannelB,
+    trace: std::sync::Arc<crate::services::trace::TraceState>,
+) {
     match frida.subscribe().await {
         Ok(mut rx) => {
             loop {
                 match rx.recv().await {
                     Ok(ev) => {
                         let v = serde_json::to_value(&ev).unwrap_or(Value::Null);
+                        if let FridaEvent::Message { script_id, payload, .. } = &ev {
+                            crate::services::trace::on_agent_message(&handle, &trace, payload.as_ref().unwrap_or(&Value::Null), *script_id);
+                        }
                         let _ = handle.emit("frida-event", v);
                         if let FridaEvent::Detached { reason, .. } = &ev {
                             crate::audit::audit("frida_detached", "session", "warn", "sidecar", reason);

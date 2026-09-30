@@ -13,7 +13,7 @@ use tokio::sync::{broadcast, mpsc, oneshot, Mutex, RwLock};
 use tokio::time::Duration;
 
 /// 注入 agent 源码（构建期内嵌，运行期零外部文件依赖）
-pub const CORE_AGENT_JS: &str = include_str!("../../../agent/core.js");
+pub const CORE_AGENT_JS: &str = include_str!("../../../agent/dist/core.js");
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event", content = "params", rename_all = "snake_case")]
