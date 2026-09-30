@@ -242,6 +242,11 @@ export const api = {
     invoke<void>("terminal_resize", { id, cols, rows }),
   terminalClose: (id: number) => invoke<void>("terminal_close", { id }),
 
+  // M3：回灌 + 实验
+  injectionRun: (package_: string, files: { localPath: string; deviceDir: string; deviceName: string }[]) =>
+    invoke<InjectionReport>("injection_run", { package: package_, files }),
+  experimentRun: (exp: ExperimentConfig) => invoke<ExperimentReport>("experiment_run", { exp }),
+
   // M2：agent RPC（探索器/探针/内存/REPL）
   fridaRpc: (f: string, args: unknown[]) => invoke<unknown>("frida_rpc", { f, args }),
 
@@ -281,4 +286,59 @@ export interface TraceRecord {
   wall: string;
   run_id: string;
   payload: Record<string, unknown>;
+}
+
+// ---------- M3：回灌 / 实验 ----------
+
+export interface InjectionFile {
+  localPath: string;
+  deviceDir: string;
+  deviceName: string;
+}
+
+export interface InjectionStep {
+  name: string;
+  status: "pass" | "warn" | "fail" | "skip";
+  evidence: string[];
+}
+
+export interface InjectionReport {
+  steps: InjectionStep[];
+  login_state_warnings: string[];
+  overall: "pass" | "warn" | "fail";
+}
+
+export interface ExperimentTemplate {
+  name: string;
+  content: string;
+}
+
+export interface ExperimentProbe {
+  clazz: string;
+  method: string;
+  maxLen?: number;
+  captureRet?: boolean;
+}
+
+export interface ExperimentConfig {
+  package: string;
+  deviceFileDir: string;
+  deviceFileName: string;
+  probe: ExperimentProbe;
+  waitS: number;
+  templates: ExperimentTemplate[];
+}
+
+export interface Observation {
+  group: string;
+  hits: number;
+  args: { k: string; v: string }[] | null;
+  ret: { k: string; v: string } | null;
+  wall: string;
+}
+
+export interface ExperimentReport {
+  experiment_id: string;
+  observations: Observation[];
+  errors: string[];
 }

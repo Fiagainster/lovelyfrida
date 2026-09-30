@@ -1,4 +1,6 @@
 use crate::backends::adb::AdbBackend;
+use crate::services::experiment::{ExperimentConfig, ExperimentReport};
+use crate::services::injection::{InjectionFile, InjectionReport};
 use crate::services::recorder::RecorderState;
 use crate::services::session::{
     attach, detach, enumerate_processes, forward_setup, ping, server_install, server_status,
@@ -149,4 +151,43 @@ pub async fn frida_rpc(
     v.get("result")
         .cloned()
         .ok_or_else(|| "rpc 无返回值".to_string())
+}
+
+/// 数据回灌七步向导（文档04-C）
+#[tauri::command]
+pub async fn injection_run(
+    recorder: tauri::State<'_, RecorderState>,
+    package: String,
+    files: Vec<InjectionFile>,
+) -> Result<InjectionReport, String> {
+    let cfg = crate::config::get();
+    let t0 = std::time::Instant::now();
+    let result = crate::services::injection::run(&cfg, &package, &files).await;
+    crate::services::recorder::record_cmd(
+        &recorder,
+        "数据回灌",
+        &format!(
+            "adb push …/data/local/tmp && adb shell su -c 'cp/chown/restorecon/md5sum'（{} 个文件 → {}）",
+            files.len(),
+            package
+        ),
+        serde_json::json!({ "package": package, "files": files }),
+        match &result {
+            Ok(r) => format!("overall={}（{} 步）", r.overall, r.steps.len()),
+            Err(e) => format!("失败：{e}"),
+        },
+        t0.elapsed().as_millis() as u64,
+    )
+    .await;
+    result
+}
+
+/// 受控实验（文档04-E / U3）
+#[tauri::command]
+pub async fn experiment_run(
+    state: tauri::State<'_, crate::services::session::FridaState>,
+    exp: ExperimentConfig,
+) -> Result<ExperimentReport, String> {
+    let cfg = crate::config::get();
+    crate::services::experiment::run(&cfg, &state.channel, Some(&state), exp).await
 }

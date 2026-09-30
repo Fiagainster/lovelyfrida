@@ -62,6 +62,8 @@ pub fn run() {
             commands::frida_cmd::frida_session_status,
             commands::frida_cmd::frida_session_ping,
             commands::frida_cmd::frida_rpc,
+            commands::frida_cmd::experiment_run,
+            commands::frida_cmd::injection_run,
             commands::terminal_cmd::terminal_create,
             commands::terminal_cmd::terminal_write,
             commands::terminal_cmd::terminal_resize,

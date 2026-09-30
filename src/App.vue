@@ -24,6 +24,7 @@ import SettingsModal from "@/components/SettingsModal.vue";
 import TerminalDrawer from "@/components/TerminalDrawer.vue";
 import PipelineView from "@/views/PipelineView.vue";
 import TimelineView from "@/views/TimelineView.vue";
+import DiffView from "@/views/DiffView.vue";
 import PlaceholderView from "@/views/PlaceholderView.vue";
 
 const app = useAppStore();
@@ -36,6 +37,7 @@ const probeStore = useProbeStore();
 const activeComponent = computed(() => {
   if (app.activeView === "pipeline") return PipelineView;
   if (app.activeView === "timeline") return TimelineView;
+  if (app.activeView === "diff") return DiffView;
   return PlaceholderView;
 });
 

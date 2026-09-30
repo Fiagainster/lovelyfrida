@@ -2,6 +2,8 @@
 //! / Experiment(M3) / Crypto(M4) / BruteOrch(M4) / Ledger(M5) / Diagnostics(M2) / Recorder(M1)。
 pub mod doctor;
 pub mod first_run;
+pub mod experiment;
+pub mod injection;
 pub mod recorder;
 pub mod session;
 pub mod terminal;

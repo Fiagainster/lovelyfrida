@@ -22,6 +22,7 @@ import CheckItem from "@/components/CheckItem.vue";
 import SessionConsole from "@/components/SessionConsole.vue";
 import RecorderCard from "@/components/RecorderCard.vue";
 import ProbeConsole from "@/components/ProbeConsole.vue";
+import InjectionWizard from "@/components/InjectionWizard.vue";
 
 /** 主视图：流水线（M0 = 环境体检 + 设备连接两个节点可用） */
 const pipeline = usePipelineStore();
@@ -318,6 +319,22 @@ onMounted(() => {
         </div>
       </div>
       <ProbeConsole />
+    </template>
+
+    <!-- ============ 节点4：数据回灌（M3） ============ -->
+    <template v-else-if="activeNode === 'inject'">
+      <div class="view-head">
+        <div class="view-head__title">
+          <div class="view-head__icon"><ArrowDownOutline size="18" /></div>
+          <div>
+            <h2>数据回灌</h2>
+            <div class="view-head__sub">
+              七步逐条状态灯 · 停应用/空跑建档不可跳过（D-06/D-07）· 推送失败自动降级中转（D-01）· 登录态预警（O-03）
+            </div>
+          </div>
+        </div>
+      </div>
+      <InjectionWizard />
     </template>
 
     <!-- ============ 其余节点：里程碑占位 ============ -->
