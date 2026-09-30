@@ -88,6 +88,25 @@ impl AdbBackend {
                 source: "MuMu 安装目录扫描".into(),
             });
         }
+        // PATH 解析为绝对路径（供 server 亲和匹配；`where adb` 首行）
+        if let Ok(o) = std::process::Command::new("where")
+            .arg("adb")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .output()
+        {
+            if let Some(first) = String::from_utf8_lossy(&o.stdout).lines().next() {
+                let p = first.trim();
+                if !p.is_empty() && Path::new(p).is_file() {
+                    candidates.push(AdbCandidate {
+                        path: p.to_string(),
+                        exists: true,
+                        chosen: false,
+                        source: "PATH（绝对路径）".into(),
+                    });
+                }
+            }
+        }
         let bundled = crate::paths::bundled_adb_path();
         candidates.push(AdbCandidate {
             path: bundled.display().to_string(),
@@ -95,6 +114,23 @@ impl AdbBackend {
             chosen: false,
             source: "bin\\adb（随包）".into(),
         });
+
+        // server 亲和（E-01/E-04 变体）：多个 adb 二进制版本不一致时会互相 kill/restart
+        // 对方的 server（实测一次安装链因此拖到 4 分钟）。若已有 server 在运行，
+        // 优先选用同一个二进制。
+        if let Some(server_path) = query_running_server_path() {
+            let idx = candidates
+                .iter()
+                .position(|c| c.exists && c.path.eq_ignore_ascii_case(&server_path));
+            if let Some(i) = idx {
+                for c in candidates.iter_mut() {
+                    c.chosen = false;
+                }
+                candidates[i].chosen = true;
+                candidates[i].source =
+                    format!("{}（与运行中 server 相同，避免重启乒乓）", candidates[i].source);
+            }
+        }
 
         // PATH 兜底：`adb` 能执行即可（放在最后）
         if !candidates.iter().any(|c| c.exists) {
@@ -110,14 +146,17 @@ impl AdbBackend {
             }
         }
 
-        let chosen = candidates
-            .iter_mut()
-            .find(|c| c.exists)
+        let chosen_idx = candidates
+            .iter()
+            .position(|c| c.chosen && c.exists)
+            .or_else(|| candidates.iter().position(|c| c.exists))
             .ok_or("未找到可用 adb（config/env/MuMu/bin 均缺失，PATH 亦未验证通过）")?;
-
-        chosen.chosen = true;
-        let adb = PathBuf::from(&chosen.path);
-        let source = chosen.source.clone();
+        for c in candidates.iter_mut() {
+            c.chosen = false;
+        }
+        candidates[chosen_idx].chosen = true;
+        let adb = PathBuf::from(&candidates[chosen_idx].path);
+        let source = candidates[chosen_idx].source.clone();
 
         // 可用性验证：真的能跑起来
         let out = run_raw(&adb, &["version"], Duration::from_secs(5)).await?;
@@ -371,4 +410,44 @@ fn scan_mumu_adb() -> Vec<PathBuf> {
     found.sort();
     found.dedup();
     found
+}
+
+/// 查询正在运行的 adb server 的可执行文件路径（adb.exe 存活进程即 server；
+/// 客户端进程转瞬即逝）。结果缓存 30s。失败返回 None。
+fn query_running_server_path() -> Option<String> {
+    use std::sync::OnceLock;
+    use std::time::Instant;
+    static CACHE: OnceLock<std::sync::Mutex<Option<(String, Instant)>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| std::sync::Mutex::new(None));
+    if let Ok(guard) = cache.lock() {
+        if let Some((path, at)) = guard.as_ref() {
+            if at.elapsed() < std::time::Duration::from_secs(30) {
+                return Some(path.clone());
+            }
+        }
+    }
+    let out = {
+        let mut cmd = std::process::Command::new("powershell");
+        cmd.args([
+            "-NoProfile",
+            "-Command",
+            "Get-CimInstance Win32_Process -Filter \"Name='adb.exe'\" | Sort-Object CreationDate | Select-Object -First 1 -ExpandProperty ExecutablePath",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000);
+        }
+        cmd.output().ok()?
+    };
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if text.is_empty() {
+        return None;
+    }
+    if let Ok(mut guard) = cache.lock() {
+        *guard = Some((text.clone(), Instant::now()));
+    }
+    Some(text)
 }

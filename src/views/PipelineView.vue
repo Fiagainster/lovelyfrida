@@ -20,6 +20,7 @@ import { isTauri } from "@/utils/env";
 import StatusLight from "@/components/StatusLight.vue";
 import CheckItem from "@/components/CheckItem.vue";
 import SessionConsole from "@/components/SessionConsole.vue";
+import RecorderCard from "@/components/RecorderCard.vue";
 
 /** 主视图：流水线（M0 = 环境体检 + 设备连接两个节点可用） */
 const pipeline = usePipelineStore();
@@ -297,6 +298,9 @@ onMounted(() => {
 
       <!-- ============ 会话控制台（frida-server / forward / attach） ============ -->
       <SessionConsole />
+
+      <!-- ============ 操作记录（Recorder v1） ============ -->
+      <RecorderCard />
     </template>
 
     <!-- ============ 其余节点：里程碑占位 ============ -->

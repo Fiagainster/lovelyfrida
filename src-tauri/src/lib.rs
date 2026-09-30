@@ -38,6 +38,8 @@ pub fn run() {
     tauri::Builder::default()
         .manage(AppState::new())
         .manage(services::session::FridaState::new(sidecar_python))
+        .manage(services::terminal::TerminalMgr::default())
+        .manage(services::recorder::RecorderState::default())
         .invoke_handler(tauri::generate_handler![
             commands::app_cmd::get_app_info,
             commands::app_cmd::confirm_close,
@@ -58,6 +60,14 @@ pub fn run() {
             commands::frida_cmd::frida_session_detach,
             commands::frida_cmd::frida_session_status,
             commands::frida_cmd::frida_session_ping,
+            commands::terminal_cmd::terminal_create,
+            commands::terminal_cmd::terminal_write,
+            commands::terminal_cmd::terminal_resize,
+            commands::terminal_cmd::terminal_close,
+            commands::terminal_cmd::terminal_list,
+            commands::terminal_cmd::recorder_list,
+            commands::terminal_cmd::recorder_export,
+            commands::terminal_cmd::recorder_clear,
         ])
         .on_window_event(|window, event| {
             // 关闭握手（LovelyMem 协议）：拦截 → 通知前端 → 10s 看门狗保底

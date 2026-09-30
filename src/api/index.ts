@@ -175,6 +175,29 @@ export interface SessionSnapshot {
   updated_at: string;
 }
 
+/** 终端 */
+export interface TerminalInfo {
+  id: number;
+  serial: string;
+  created_at: string;
+}
+
+/** Recorder 步骤（文档03§五） */
+export interface RecordedStep {
+  seq: number;
+  ts: string;
+  action: string;
+  command: string;
+  params: Record<string, unknown>;
+  result: string;
+  duration_ms: number;
+}
+
+export interface ExportResult {
+  path: string;
+  count: number;
+}
+
 /** Rust 事件：frida-event（FridaEvent serde tag=event） */
 export interface FridaEventPayload {
   event: "ready" | "message" | "detached" | "device_lost" | "spawn_added";
@@ -211,4 +234,17 @@ export const api = {
   fridaSessionPing: () => invoke<Record<string, unknown>>("frida_session_ping"),
 
   confirmClose: () => invoke<void>("confirm_close"),
+
+  // 终端（PTY）
+  terminalCreate: (serial: string) => invoke<TerminalInfo>("terminal_create", { serial }),
+  terminalWrite: (id: number, data: string) => invoke<void>("terminal_write", { id, data }),
+  terminalResize: (id: number, cols: number, rows: number) =>
+    invoke<void>("terminal_resize", { id, cols, rows }),
+  terminalClose: (id: number) => invoke<void>("terminal_close", { id }),
+
+  // Recorder
+  recorderList: () => invoke<RecordedStep[]>("recorder_list"),
+  recorderExport: (format: "ps1" | "sh" | "md" | "json") =>
+    invoke<ExportResult>("recorder_export", { format }),
+  recorderClear: () => invoke<void>("recorder_clear"),
 };

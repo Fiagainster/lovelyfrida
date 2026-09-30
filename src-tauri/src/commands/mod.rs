@@ -7,3 +7,4 @@ pub mod config_cmd;
 pub mod doctor_cmd;
 pub mod frida_cmd;
 pub mod guard_cmd;
+pub mod terminal_cmd;

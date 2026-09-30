@@ -2,10 +2,12 @@
 import { computed } from "vue";
 import { useAppStore, VIEW_DEFS } from "@/stores/app";
 import { usePipelineStore } from "@/stores/pipeline";
+import { useTerminalStore } from "@/stores/terminal";
 
 /** 底部状态栏（文档03）：就绪状态 / 探针计数(M2) / 视图索引 / ⌘K 提示 */
 const app = useAppStore();
 const pipeline = usePipelineStore();
+const terminal = useTerminalStore();
 
 const viewName = computed(
   () => VIEW_DEFS.find((v) => v.key === app.activeView)?.name ?? "",
@@ -32,6 +34,10 @@ const deviceText = computed(() =>
       <kbd>Ctrl</kbd>+<kbd>K</kbd> 命令面板
     </span>
     <span class="statusbar__hint">|</span>
-    <span class="statusbar__hint">v0.1.0 M0</span>
+    <span class="statusbar__hint statusbar__btn" @click="terminal.toggle()">
+      终端 {{ terminal.sessions.length > 0 ? `(${terminal.sessions.length})` : "" }}
+    </span>
+    <span class="statusbar__hint">|</span>
+    <span class="statusbar__hint">v0.1.0 M1</span>
   </footer>
 </template>

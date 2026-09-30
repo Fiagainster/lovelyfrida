@@ -1,4 +1,5 @@
 use crate::backends::adb::AdbBackend;
+use crate::services::recorder::RecorderState;
 use crate::services::session::{
     attach, detach, enumerate_processes, forward_setup, ping, server_install, server_status,
     FridaState, ProcEntry, SessionSnapshot, ServerStatusReport, StepReport,
@@ -17,9 +18,22 @@ pub async fn frida_server_status(
 #[tauri::command]
 pub async fn frida_server_install(
     state: tauri::State<'_, FridaState>,
+    recorder: tauri::State<'_, RecorderState>,
 ) -> Result<Vec<StepReport>, String> {
     let cfg = crate::config::get();
-    server_install(&cfg, &state.channel).await
+    let t0 = std::time::Instant::now();
+    let result = server_install(&cfg, &state.channel).await;
+    let ok = result.is_ok() && !result.as_ref().unwrap().iter().any(|s| s.status == "fail");
+    crate::services::recorder::record_cmd(
+        &recorder,
+        "frida-server 安装并启动",
+        "adb push <matrix>/frida-server /data/local/tmp/ && adb shell su -c 'chmod 755 … && nohup … &'",
+        serde_json::json!({"port": cfg.frida_port}),
+        if ok { "全部步骤通过".into() } else { "存在失败步骤（见逐步报告）".into() },
+        t0.elapsed().as_millis() as u64,
+    )
+    .await;
+    result
 }
 
 /// 建立 adb forward 并端到端验证
@@ -51,18 +65,53 @@ pub async fn frida_processes(
 pub async fn frida_session_attach(
     app: tauri::AppHandle,
     state: tauri::State<'_, FridaState>,
+    recorder: tauri::State<'_, RecorderState>,
     target: serde_json::Value,
 ) -> Result<SessionSnapshot, String> {
     let cfg = crate::config::get();
-    attach(&app, &state, &cfg, target).await
+    let t0 = std::time::Instant::now();
+    let result = attach(&app, &state, &cfg, target.clone()).await;
+    let tgt = if target.is_u64() || target.is_i64() {
+        format!("pid:{}", target.as_i64().unwrap_or(0))
+    } else {
+        target.as_str().unwrap_or("unknown").to_string()
+    };
+    crate::services::recorder::record_cmd(
+        &recorder,
+        "frida 附加会话",
+        &format!("frida -H 127.0.0.1:<forward> -f/-n {tgt} -l core.js"),
+        serde_json::json!({"target": tgt}),
+        match &result {
+            Ok(s) if s.phase == crate::services::session::SessionPhase::Running => {
+                format!("运行中（session#{})", s.session_id.unwrap_or(0))
+            }
+            Ok(_) => "未到达 RUNNING".into(),
+            Err(e) => format!("失败：{e}"),
+        },
+        t0.elapsed().as_millis() as u64,
+    )
+    .await;
+    result
 }
 
 #[tauri::command]
 pub async fn frida_session_detach(
     app: tauri::AppHandle,
     state: tauri::State<'_, FridaState>,
+    recorder: tauri::State<'_, RecorderState>,
 ) -> Result<SessionSnapshot, String> {
-    detach(&app, &state).await
+    let t0 = std::time::Instant::now();
+    let snap = detach(&app, &state).await?;
+    crate::services::recorder::record_cmd(
+        &recorder,
+        "frida 分离会话",
+        "卸载脚本 + session.detach()",
+        serde_json::json!({}),
+        "已分离".into(),
+        t0.elapsed().as_millis() as u64,
+    )
+    .await;
+    Ok(snap)
 }
 
 #[tauri::command]

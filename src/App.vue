@@ -11,6 +11,7 @@ import {
 import { useAppStore, VIEW_DEFS, type ViewKey } from "@/stores/app";
 import { usePipelineStore } from "@/stores/pipeline";
 import { useSessionStore } from "@/stores/session";
+import { useTerminalStore } from "@/stores/terminal";
 import { useSettingsStore } from "@/stores/settings";
 import { api } from "@/api";
 import { isTauri } from "@/utils/env";
@@ -19,6 +20,7 @@ import PipelineNav from "@/components/PipelineNav.vue";
 import StatusBar from "@/components/StatusBar.vue";
 import CommandPalette from "@/components/CommandPalette.vue";
 import SettingsModal from "@/components/SettingsModal.vue";
+import TerminalDrawer from "@/components/TerminalDrawer.vue";
 import PipelineView from "@/views/PipelineView.vue";
 import PlaceholderView from "@/views/PlaceholderView.vue";
 
@@ -26,6 +28,7 @@ const app = useAppStore();
 const pipeline = usePipelineStore();
 const settings = useSettingsStore();
 const sessionStore = useSessionStore();
+const terminalStore = useTerminalStore();
 
 const activeComponent = computed(() =>
   app.activeView === "pipeline" ? PipelineView : PlaceholderView,
@@ -71,6 +74,7 @@ onMounted(() => {
     // frida 事件（message/detached/device_lost）+ 会话状态机事件 → store
     import("@tauri-apps/api/event").then(({ listen }) => {
       void sessionStore.bindEvents(listen);
+      void terminalStore.bindEvents(listen);
     });
   }
 });
@@ -132,6 +136,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
       />
 
       <CommandPalette />
+      <TerminalDrawer />
       <SettingsModal v-model:show="app.settingsOpen" />
     </div>
     </NMessageProvider>

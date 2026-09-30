@@ -274,6 +274,13 @@
 .statusbar__hint {
   color: var(--text-3);
 }
+.statusbar__btn {
+  cursor: pointer;
+  color: var(--text-1);
+}
+.statusbar__btn:hover {
+  color: var(--accent);
+}
 .statusbar kbd {
   font-family: var(--font-mono);
   font-size: 10px;
