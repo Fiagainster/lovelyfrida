@@ -584,8 +584,17 @@ pub struct ProcEntry {
 }
 
 pub async fn enumerate_processes(cfg: &AppConfig, frida: &FridaChannelB) -> Result<Vec<ProcEntry>, String> {
+    // 先确保 forward 存在并取主机侧端口（S-06：主机端口可能与设备端口不同）
+    let adb = AdbBackend::detect(&cfg.adb_path, &cfg.doctor.adb_extra_paths).await?;
+    let devices = adb.devices().await?;
+    let serial = devices
+        .iter()
+        .find(|d| d.state == "device")
+        .map(|d| d.serial.clone())
+        .ok_or("无 device 状态设备：先连接模拟器")?;
+    let host_port = forward_setup(cfg, &adb, &serial).await?.host_port;
     let conn = frida
-        .call("remote_connect", json!({"host": "127.0.0.1", "port": cfg.frida_port}))
+        .call("remote_connect", json!({"host": "127.0.0.1", "port": host_port}))
         .await?;
     let device = conn.get("key").and_then(|k| k.as_str()).ok_or("未返回 device key")?.to_string();
     let procs = frida
