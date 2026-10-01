@@ -10,6 +10,44 @@ import Java from "frida-java-bridge";
 
 // ---------------- dlopen 监控 ----------------
 
+
+/** 跨 frida 版本的导出解析（17.x 移除了静态 getExportByName；getGlobalExportByName 为新 API） */
+function resolveExport(modName: string | null, name: string): NativePointer | null {
+  const M = Module as unknown as Record<string, unknown>;
+  // 1) 17.x 新 API：全局搜索
+  if (typeof M.getGlobalExportByName === "function") {
+    try {
+      const p = (M.getGlobalExportByName as (n: string) => NativePointer)(name);
+      if (p && !p.isNull()) return p;
+    } catch { /* not found → 继续按模块找 */ }
+  }
+  // 2) 旧静态 API
+  if (typeof M.findExportByName === "function") {
+    try {
+      const p = (M.findExportByName as (m: string | null, n: string) => NativePointer | null)(modName, name);
+      if (p && !p.isNull()) return p;
+    } catch { /* continue */ }
+  }
+  // 3) 实例方法
+  if (modName !== null) {
+    try {
+      const m = (Process as unknown as { findModuleByName: (n: string) => unknown }).findModuleByName(modName);
+      if (m) {
+        const inst = m as unknown as Record<string, unknown>;
+        for (const meth of ["getExportByName", "findExportByName"]) {
+          if (typeof inst[meth] === "function") {
+            try {
+              const p = (inst[meth] as (n: string) => NativePointer)(name);
+              if (p && !p.isNull()) return p;
+            } catch { /* next */ }
+          }
+        }
+      }
+    } catch { /* continue */ }
+  }
+  return null;
+}
+
 let dlopenWatchActive = false;
 
 export function watchDlopen(): { ok: boolean; hooks: number; error: string | null } {
@@ -18,8 +56,11 @@ export function watchDlopen(): { ok: boolean; hooks: number; error: string | nul
   const errs: string[] = [];
   for (const name of ["dlopen", "android_dlopen_ext"]) {
     try {
-      const M = Module as unknown as { getExportByName: (m: string | null, n: string) => NativePointer };
-      const addr = M.getExportByName("libdl.so", name) ?? M.getExportByName(null, name);
+      const addr = resolveExport("libdl.so", name) ?? resolveExport(null, name);
+      if (!addr) {
+        errs.push(`${name}: 符号未找到`);
+        continue;
+      }
       Interceptor.attach(addr, {
         onEnter(args) {
           const path = args[0].readCString() ?? "";
@@ -50,7 +91,7 @@ export function watchRegisterNatives(): { ok: boolean; symbol: string | null; er
     "_ZN3art9JavaVMExt15RegisterNativesEP7_JNIEnvP7_jclassPK15JNINativeMethodi",
   ];
   for (const sym of candidates) {
-    const addr = (Module as unknown as { findExportByName: (m: string, n: string) => NativePointer | null }).findExportByName("libart.so", sym);
+    const addr = resolveExport("libart.so", sym);
     if (!addr) continue;
     try {
       Interceptor.attach(addr, {
@@ -107,28 +148,33 @@ export function dumpDex(maxDex: number): {
 } {
   const found: { base: string; size: number; header: string }[] = [];
   const dumped: { base: string; size: number }[] = [];
+  const DEX_MAGIC = "64 65 78 0a 30 33 ?? 00"; // dex\n03?\0（035/037/038/039）
   const ranges = Process.enumerateRanges("r--").concat(Process.enumerateRanges("rw-"));
   for (const r of ranges) {
     if (found.length >= maxDex) break;
     if (r.size < 112 || r.size > 100 * 1024 * 1024) continue;
     try {
-      const magic = r.base.readByteArray(8);
-      if (!magic) continue;
-      const u8 = new Uint8Array(magic);
-      // "dex\n035\0" / 037 / 038 / 039
-      if (u8[0] === 0x64 && u8[1] === 0x65 && u8[2] === 0x78 && u8[3] === 0x0a) {
-        const ver = String.fromCharCode(u8[4], u8[5], u8[6]);
-        const base = r.base.toString();
-        found.push({ base, size: r.size, header: "dex\n0" + ver });
-        // 回传完整内存块（data 通道），宿主写文件
+      // 在区段内扫描 dex 魔数（头部不一定在映射起始位置）
+      const matches = Memory.scanSync(r.base, r.size, DEX_MAGIC);
+      for (const m of matches) {
+        if (found.length >= maxDex) break;
         try {
-          const buf = r.base.readByteArray(Math.min(r.size, 60 * 1024 * 1024));
+          const u8 = new Uint8Array(m.address.readByteArray(8) ?? new Uint8Array(0));
+          const ver = String.fromCharCode(u8[4], u8[5], u8[6]);
+          // header 偏移 32 处是 file_size（u32 LE），做合法性校验
+          const fsizeBuf = m.address.add(32).readByteArray(4);
+          const fsize = fsizeBuf ? new Uint8Array(fsizeBuf) : null;
+          const fileSize = fsize ? fsize[0] | (fsize[1] << 8) | (fsize[2] << 16) | (fsize[3] << 24) : 0;
+          if (fileSize < 112 || fileSize > 80 * 1024 * 1024) continue;
+          const baseStr = m.address.toString();
+          found.push({ base: baseStr, size: fileSize, header: "dex\n0" + ver });
+          const buf = m.address.readByteArray(Math.min(fileSize, 60 * 1024 * 1024));
           if (buf) {
-            send({ t: "dex_dump", base, size: r.size }, buf as ArrayBuffer);
-            dumped.push({ base, size: r.size });
+            send({ t: "dex_dump", base: baseStr, size: fileSize }, buf as ArrayBuffer);
+            dumped.push({ base: baseStr, size: fileSize });
           }
-        } catch (e) {
-          /* 读失败的区域跳过 */
+        } catch {
+          continue;
         }
       }
     } catch {
@@ -159,7 +205,11 @@ export function watchSsl(
   // Android 的 libssl 可能叫 libssl.so；conscrypt 场景走 Java 层 SSLOutputStream——v1 先 native
   for (const fn of ["SSL_read", "SSL_write"]) {
     try {
-      const addr = (Module as unknown as { getExportByName: (m: string, n: string) => NativePointer }).getExportByName("libssl.so", fn);
+      const addr = resolveExport("libssl.so", fn);
+      if (!addr) {
+        err = `${fn}: libssl.so 符号未找到（部分模拟器 ROM 裁剪）`;
+        continue;
+      }
       Interceptor.attach(addr, {
         onEnter(args) {
           this._buf = args[1];
