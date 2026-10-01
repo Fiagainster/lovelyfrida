@@ -7,7 +7,7 @@ import StatusLight from "@/components/StatusLight.vue";
 
 /** 档案台账（文档04-H / M5）：发现登记 + 置信度约束（high=双证据）+ 导出 + 案卷包 */
 const message = useMessage();
-const caseName = ref("盘古石杯-第二轮");
+const caseName = ref("默认案件");
 const findings = ref<Finding[]>([]);
 const loading = ref(false);
 
@@ -104,11 +104,11 @@ onMounted(refresh);
     <h3>登记发现（Finding）</h3>
     <div class="connect-row" style="margin-bottom: 8px">
       <NInput v-model:value="caseName" size="small" placeholder="案名" style="width: 200px" @blur="refresh" />
-      <NInput v-model:value="form.questionId" size="small" placeholder="题号/APK-1" style="width: 130px" />
+      <NInput v-model:value="form.questionId" size="small" placeholder="编号，如 Q1 / Finding-01" style="width: 130px" />
       <NInput v-model:value="form.question" size="small" placeholder="问题，如：用户密码是什么" style="flex: 1" />
     </div>
     <div class="connect-row" style="margin-bottom: 8px">
-      <NInput v-model:value="form.answer" size="small" placeholder="答案，如 Wei123123" style="flex: 1" />
+      <NInput v-model:value="form.answer" size="small" placeholder="分析结论或密码" style="flex: 1" />
       <NSelect v-model:value="form.confidence" :options="confOptions" size="small" style="width: 300px" />
     </div>
     <div class="connect-row" style="margin-bottom: 8px">
@@ -134,7 +134,7 @@ onMounted(refresh);
       <NInput v-model:value="form.evNote" size="small" placeholder="证据说明（如：重算逐字节一致）" style="flex: 1" />
     </div>
     <div class="connect-row" style="margin-bottom: 8px">
-      <NInput v-model:value="form.source" size="small" placeholder="出处（如：probe#p1 时间轴 / APK-1 探针）" style="flex: 1" />
+      <NInput v-model:value="form.source" size="small" placeholder="出处（如：时间轴 / 回灌向导 / 探索器）" style="flex: 1" />
       <NInput v-model:value="form.screenshotSlot" size="small" placeholder="截图位编号 N-x" style="width: 150px" />
     </div>
     <div class="connect-row">

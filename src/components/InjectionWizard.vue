@@ -53,7 +53,7 @@ async function onRun() {
   <div class="card info-card">
     <h3>回灌配置</h3>
     <div class="connect-row" style="margin-bottom: 10px">
-      <NInput v-model:value="pkg" size="small" placeholder="目标包名，如 com.hidden.calculator" style="width: 320px" />
+      <NInput v-model:value="pkg" size="small" placeholder="目标包名，如 com.example.app" style="width: 320px" />
     </div>
     <table class="plain-table">
       <thead>

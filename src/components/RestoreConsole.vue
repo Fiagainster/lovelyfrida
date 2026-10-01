@@ -121,9 +121,9 @@ async function onGenC() {
       <tbody>
         <tr v-for="(s, i) in samples" :key="i">
           <td><NTag size="small" :bordered="false" :type="i === 0 ? 'info' : 'success'">样本{{ i + 1 }}{{ i > 0 ? "（防假命中）" : "" }}</NTag></td>
-          <td><NInput v-model:value="s.plaintext" size="small" placeholder="如 Wei123123" /></td>
-          <td><NInput v-model:value="s.salt" size="small" placeholder="如 etmLYLvSIJn2mzgC" /></td>
-          <td><NInput v-model:value="s.target" size="small" placeholder="如 1Q0Tvj9/GLaF+...=" /></td>
+          <td><NInput v-model:value="s.plaintext" size="small" placeholder="用户输入的明文密码" /></td>
+          <td><NInput v-model:value="s.salt" size="small" placeholder= /></td>
+          <td><NInput v-model:value="s.target" size="small" placeholder="Base64 或 hex 编码的哈希值" /></td>
         </tr>
       </tbody>
     </table>

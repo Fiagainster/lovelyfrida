@@ -226,7 +226,7 @@ onMounted(refreshScripts);
     <div class="card info-card">
       <h3>实例检查器（Java.choose + 定向调用）</h3>
       <div class="connect-row">
-        <NInput v-model:value="inst.className" size="small" placeholder="类名，如 com.notevault.app.ui.model.Note" style="width: 340px" />
+        <NInput v-model:value="inst.className" size="small" placeholder="类名，如 com.example.app.model.User" style="width: 340px" />
         <NButton size="small" secondary :loading="instLoading" @click="onChoose">
           <template #icon><SearchOutline /></template>
           搜实例

@@ -1,7 +1,6 @@
-/* ============ LovelyFrida 主题 token ============
- * 结构参照 LovelyMem：base（主题无关）+ dark/light（只覆盖色彩变量）。
- * 纪律（文档03）：状态色两主题语义一致，只调明度不改色相；
- * 终端默认深色；差分矩阵高亮色不随主题（M3 定义）。
+/* ============ LovelyFrida 主题 token v2 ============
+ * 设计语言：安全工具级深色主题，GitHub Dark 色系最佳实践。
+ * 原则：信息层级靠明度差（不是色相差）；状态色语义不变；交互反馈用 accent。
  */
 
 :root {
@@ -11,95 +10,97 @@
   --nav-w-collapsed: 52px;
   --sidepanel-w: 320px;
 
-  --font-ui: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
-  --font-mono: "Cascadia Mono", Consolas, "Courier New", monospace;
+  --font-ui: "Inter", "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", "Cascadia Mono", Consolas, monospace;
 
-  --radius-sm: 5px;
-  --radius-md: 9px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
   --radius-lg: 14px;
 
-  --trans-fast: 0.14s ease;
-  --trans-slow: 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+  --trans-fast: 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  --trans-slow: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 
-  --grad-accent: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
-  --grad-accent-soft: linear-gradient(135deg, rgba(59, 130, 246, 0.16), rgba(139, 92, 246, 0.16));
+  --grad-accent: linear-gradient(135deg, #4a9eff 0%, #7c6aff 100%);
+  --grad-accent-soft: linear-gradient(135deg, rgba(74, 158, 255, 0.12), rgba(124, 106, 255, 0.12));
 }
 
-/* ---------- 深色（默认，LovelyMem 风格精修） ---------- */
+/* ---------- 深色（默认，GitHub Dark 系） ---------- */
 :root[data-theme="dark"] {
-  --bg-base: #0c1017;
-  --bg-panel: #141a24;
-  --bg-elevated: #1a2230;
-  --bg-hover: rgba(100, 150, 255, 0.06);
-  --bg-input: #0a0e15;
-  --bg-titlebar: #090d13;
-  --bg-statusbar: #090d13;
+  --bg-base: #0d1117;
+  --bg-panel: #161b22;
+  --bg-elevated: #1c2129;
+  --bg-hover: rgba(177, 186, 198, 0.06);
+  --bg-input: #0d1117;
+  --bg-titlebar: #010409;
+  --bg-statusbar: #010409;
+  --bg-terminal: #0a0e14;
 
-  --text-1: #e4eaf4;
-  --text-2: #9aa8bd;
-  --text-3: #5f6b80;
+  --text-1: #e6edf3;
+  --text-2: #8b949e;
+  --text-3: #656d76;
 
-  --border-1: #1e2836;
-  --border-2: #2c3a50;
+  --border-1: #21262d;
+  --border-2: #30363d;
 
   --accent: #58a6ff;
-  --accent-soft: rgba(88, 166, 255, 0.12);
+  --accent-soft: rgba(56, 139, 253, 0.1);
 
-  --shadow-1: 0 1px 4px rgba(0, 0, 0, 0.4);
-  --shadow-2: 0 8px 32px rgba(0, 0, 0, 0.5);
+  --shadow-1: 0 1px 0 rgba(0, 0, 0, 0.2);
+  --shadow-2: 0 8px 24px rgba(1, 4, 9, 0.6);
 
-  /* 六态状态色（语义全场统一） */
-  --st-pending: #6b7684;
-  --st-running: #4d8dff;
-  --st-pass: #34d399;
-  --st-warn: #fbbf24;
-  --st-fail: #f87171;
-  --st-skip: #556070;
-  /* 状态色 12% 透明度底（色块用） */
-  --st-pass-soft: rgba(52, 211, 153, 0.12);
-  --st-warn-soft: rgba(251, 191, 36, 0.12);
-  --st-fail-soft: rgba(248, 113, 113, 0.12);
-  --st-skip-soft: rgba(85, 96, 112, 0.16);
-  --st-running-soft: rgba(77, 141, 255, 0.12);
-  --st-pending-soft: rgba(107, 118, 132, 0.12);
+  /* 六态状态色（GitHub 语义色系） */
+  --st-pending: #6e7681;
+  --st-running: #58a6ff;
+  --st-pass: #3fb950;
+  --st-warn: #d29922;
+  --st-fail: #f85149;
+  --st-skip: #484f58;
+
+  --st-pass-soft: rgba(63, 185, 80, 0.12);
+  --st-warn-soft: rgba(210, 153, 34, 0.12);
+  --st-fail-soft: rgba(248, 81, 73, 0.12);
+  --st-skip-soft: rgba(72, 79, 88, 0.2);
+  --st-running-soft: rgba(88, 166, 255, 0.1);
+  --st-pending-soft: rgba(110, 118, 129, 0.12);
 }
 
-/* ---------- 浅色 ---------- */
+/* ---------- 浅色（GitHub Light 系） ---------- */
 :root[data-theme="light"] {
-  --bg-base: #f3f5f8;
+  --bg-base: #f6f8fa;
   --bg-panel: #ffffff;
-  --bg-elevated: #f8fafc;
-  --bg-hover: rgba(15, 23, 42, 0.045);
+  --bg-elevated: #f6f8fa;
+  --bg-hover: rgba(15, 23, 42, 0.04);
   --bg-input: #ffffff;
   --bg-titlebar: #ffffff;
   --bg-statusbar: #f6f8fa;
+  --bg-terminal: #0d1117;
 
-  --text-1: #17202c;
-  --text-2: #4d5766;
-  --text-3: #8c96a5;
+  --text-1: #1f2328;
+  --text-2: #59636e;
+  --text-3: #818b98;
 
-  --border-1: #e2e7ee;
-  --border-2: #cbd4e0;
+  --border-1: #d0d7de;
+  --border-2: #afb8c1;
 
-  --accent: #2563eb;
-  --accent-soft: rgba(37, 99, 235, 0.09);
+  --accent: #0969da;
+  --accent-soft: rgba(9, 105, 218, 0.08);
 
-  --shadow-1: 0 1px 3px rgba(23, 32, 44, 0.08);
-  --shadow-2: 0 10px 30px rgba(23, 32, 44, 0.14);
+  --shadow-1: 0 1px 0 rgba(31, 35, 40, 0.04);
+  --shadow-2: 0 8px 24px rgba(31, 35, 40, 0.12);
 
-  /* 同色相，仅调明度 */
-  --st-pending: #94a0af;
-  --st-running: #2563eb;
-  --st-pass: #059669;
-  --st-warn: #b45309;
-  --st-fail: #dc2626;
-  --st-skip: #a6b0bd;
-  --st-pass-soft: rgba(5, 150, 105, 0.09);
-  --st-warn-soft: rgba(180, 83, 9, 0.09);
-  --st-fail-soft: rgba(220, 38, 38, 0.08);
-  --st-skip-soft: rgba(166, 176, 189, 0.14);
-  --st-running-soft: rgba(37, 99, 235, 0.09);
-  --st-pending-soft: rgba(148, 160, 175, 0.12);
+  --st-pending: #818b98;
+  --st-running: #0969da;
+  --st-pass: #1a7f37;
+  --st-warn: #9a6700;
+  --st-fail: #cf222e;
+  --st-skip: #8c959f;
+
+  --st-pass-soft: rgba(26, 127, 55, 0.08);
+  --st-warn-soft: rgba(154, 103, 0, 0.08);
+  --st-fail-soft: rgba(207, 34, 46, 0.08);
+  --st-skip-soft: rgba(140, 149, 159, 0.15);
+  --st-running-soft: rgba(9, 105, 218, 0.08);
+  --st-pending-soft: rgba(129, 139, 152, 0.12);
 }
 
 /* ---------- 基础 ---------- */
@@ -119,21 +120,23 @@ body {
   color: var(--text-1);
   background: var(--bg-base);
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 .mono {
   font-family: var(--font-mono);
+  font-feature-settings: "liga" 1;
 }
 
 ::selection {
   background: var(--accent-soft);
 }
 ::-webkit-scrollbar {
-  width: 9px;
-  height: 9px;
+  width: 8px;
+  height: 8px;
 }
 ::-webkit-scrollbar-thumb {
   background: var(--border-2);
-  border-radius: 5px;
+  border-radius: 4px;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
@@ -145,8 +148,11 @@ body {
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
 
-/* 状态灯脉冲动画 */
+/* ---------- 状态灯脉冲 ---------- */
 @keyframes pulse-ring {
   0% {
     box-shadow: 0 0 0 0 var(--st-running-soft);
@@ -159,35 +165,51 @@ body {
   }
 }
 .status-light--running .status-light__dot {
-  animation: pulse-ring 1.5s infinite;
+  animation: pulse-ring 1.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
-/* 通用卡片（LovelyMem 风格 hover 提亮） */
+/* ---------- 通用卡片（GitHub Card） ---------- */
 .card {
   background: var(--bg-panel);
   border: 1px solid var(--border-1);
   border-radius: var(--radius-md);
-  transition: border-color var(--trans-fast), box-shadow var(--trans-fast);
+  transition: border-color var(--trans-fast);
 }
 .card:hover {
   border-color: var(--border-2);
-  box-shadow: var(--shadow-1);
 }
 
-/* 渐变主按钮（naive primary 的皮肤增强） */
+/* ---------- 渐变主按钮 ---------- */
 .btn-hero {
   background: var(--grad-accent) !important;
   border: none !important;
   color: #fff !important;
   font-weight: 600;
-  box-shadow: 0 2px 12px rgba(80, 120, 255, 0.4);
+  letter-spacing: 0.01em;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1);
   transition: filter var(--trans-fast), transform var(--trans-fast), box-shadow var(--trans-fast);
 }
 .btn-hero:hover {
-  filter: brightness(1.12);
-  box-shadow: 0 4px 18px rgba(80, 120, 255, 0.5);
+  filter: brightness(1.1);
+  box-shadow: 0 2px 8px rgba(74, 158, 255, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.15);
 }
 .btn-hero:active {
   transform: translateY(1px);
-  box-shadow: 0 1px 4px rgba(80, 120, 255, 0.3);
+  filter: brightness(0.95);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+/* ---------- 视图切换淡入 ---------- */
+@keyframes view-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.workspace__view-inner {
+  animation: view-enter 0.18s ease-out;
 }
