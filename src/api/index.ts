@@ -252,6 +252,17 @@ export const api = {
   bruteGenerateC: (scheme: CryptoScheme, sample: CryptoSample) =>
     invoke<{ path: string }>("brute_generate_c", { scheme, sample }),
 
+  // M5：台账
+  ledgerAdd: (payload: {
+    caseName: string; questionId: string; question: string; answer: string;
+    confidence: string; evidence: { kind: string; note: string }[];
+    source: string; screenshotSlot: string;
+  }) => invoke<number>("ledger_add", { ...payload, caseName: payload.caseName }),
+  ledgerList: (caseName: string) => invoke<Finding[]>("ledger_list", { caseName }),
+  ledgerDelete: (id: number) => invoke<void>("ledger_delete", { id }),
+  ledgerExportMd: (caseName: string) => invoke<string>("ledger_export_md", { caseName }),
+  ledgerExportBundle: (caseName: string) => invoke<string>("ledger_export_bundle", { caseName }),
+
   // M3：回灌 + 实验
   injectionRun: (package_: string, files: { localPath: string; deviceDir: string; deviceName: string }[]) =>
     invoke<InjectionReport>("injection_run", { package: package_, files }),
@@ -395,4 +406,16 @@ export interface BruteResult {
   tried: number;
   duration_ms: number;
   note: string;
+}
+
+export interface Finding {
+  id: number;
+  case_id: number;
+  question_id: string;
+  question: string;
+  answer: string;
+  confidence: "high" | "medium" | "low";
+  evidence: { kind: "math" | "device"; note: string }[];
+  source: string;
+  screenshot_slot: string;
 }

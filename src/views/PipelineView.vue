@@ -24,6 +24,7 @@ import RecorderCard from "@/components/RecorderCard.vue";
 import ProbeConsole from "@/components/ProbeConsole.vue";
 import InjectionWizard from "@/components/InjectionWizard.vue";
 import RestoreConsole from "@/components/RestoreConsole.vue";
+import LedgerConsole from "@/components/LedgerConsole.vue";
 
 /** 主视图：流水线（M0 = 环境体检 + 设备连接两个节点可用） */
 const pipeline = usePipelineStore();
@@ -352,6 +353,22 @@ onMounted(() => {
         </div>
       </div>
       <RestoreConsole />
+    </template>
+
+    <!-- ============ 节点8：归档（M5） ============ -->
+    <template v-else-if="activeNode === 'archive'">
+      <div class="view-head">
+        <div class="view-head__title">
+          <div class="view-head__icon"><ArchiveOutline size="18" /></div>
+          <div>
+            <h2>归档</h2>
+            <div class="view-head__sub">
+              Evidence 台账 · high 置信度 = 数学自证 + 真机复现（数据库约束）· 导出 Markdown/案卷包（U8/U10）
+            </div>
+          </div>
+        </div>
+      </div>
+      <LedgerConsole />
     </template>
 
     <!-- ============ 其余节点：里程碑占位 ============ -->

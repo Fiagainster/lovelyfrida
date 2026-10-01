@@ -6,6 +6,7 @@ pub mod experiment;
 pub mod brute;
 pub mod crypto;
 pub mod injection;
+pub mod ledger;
 pub mod recorder;
 pub mod session;
 pub mod terminal;

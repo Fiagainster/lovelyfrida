@@ -3,6 +3,7 @@ use crate::services::experiment::{ExperimentConfig, ExperimentReport};
 use crate::services::brute::{estimate as brute_estimate_fn, generate_c_skeleton, run_builtin as brute_run_fn, BruteEstimate, BruteResult};
 use crate::services::crypto::{reconstruct as crypto_reconstruct_fn, ReconstructResult, Sample};
 use crate::services::injection::{InjectionFile, InjectionReport};
+use crate::services::ledger::{self as ledger_svc, EvidenceItem, Finding};
 use crate::services::recorder::RecorderState;
 use crate::services::session::{
     attach, detach, enumerate_processes, forward_setup, ping, server_install, server_status,
@@ -250,4 +251,40 @@ pub async fn brute_generate_c(
     std::fs::write(&path, c).map_err(|e| e.to_string())?;
     crate::audit::audit("brute_generate_c", &path.display().to_string(), "done", "restore-node", &scheme.family);
     Ok(serde_json::json!({ "path": path.display().to_string() }))
+}
+
+// ---------- M5：Evidence 台账 / 案卷包 ----------
+
+#[tauri::command]
+pub async fn ledger_add(
+    case_name: String,
+    question_id: String,
+    question: String,
+    answer: String,
+    confidence: String,
+    evidence: Vec<EvidenceItem>,
+    source: String,
+    screenshot_slot: String,
+) -> Result<i64, String> {
+    ledger_svc::add_finding(&case_name, &question_id, &question, &answer, &confidence, &evidence, &source, &screenshot_slot)
+}
+
+#[tauri::command]
+pub async fn ledger_list(case_name: String) -> Result<Vec<Finding>, String> {
+    ledger_svc::list_findings(&case_name)
+}
+
+#[tauri::command]
+pub async fn ledger_delete(id: i64) -> Result<(), String> {
+    ledger_svc::delete_finding(id)
+}
+
+#[tauri::command]
+pub async fn ledger_export_md(case_name: String) -> Result<String, String> {
+    ledger_svc::export_markdown(&case_name)
+}
+
+#[tauri::command]
+pub async fn ledger_export_bundle(case_name: String) -> Result<String, String> {
+    ledger_svc::export_bundle(&case_name)
 }
