@@ -22,6 +22,13 @@ function removeFile(i: number) {
   files.splice(i, 1);
 }
 
+function applyProfile(pk: string, dir: string) {
+  pkg.value = pk;
+  if (files.length > 0) files[0].deviceDir = dir;
+}
+
+defineExpose({ applyProfile });
+
 async function onRun() {
   const valid = files.filter((f) => f.localPath.trim() && f.deviceDir.trim() && f.deviceName.trim());
   if (!pkg.value.trim() || valid.length === 0) {

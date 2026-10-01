@@ -6,13 +6,14 @@ import { useProbeStore } from "@/stores/probe";
 import { useSessionStore } from "@/stores/session";
 import type { ProbeStat } from "@/api";
 import StatusLight from "@/components/StatusLight.vue";
+import DeepConsole from "@/components/DeepConsole.vue";
 
 /** 探针注入节点（M2）：探针工作台 / 探索器 / REPL 三 tab */
 const probe = useProbeStore();
 const session = useSessionStore();
 const message = useMessage();
 
-const tab = ref<"probes" | "explorer" | "repl">("probes");
+const tab = ref<"probes" | "explorer" | "repl" | "deep">("probes");
 
 // ---------- 探针表单 ----------
 const form = reactive({
@@ -23,6 +24,13 @@ const form = reactive({
   condition: "",
 });
 const needSession = computed(() => session.session?.phase !== "running");
+
+function fillTemplate(clazz: string, method: string) {
+  form.clazz = clazz;
+  form.method = method;
+  form.captureRet = true;
+  message.info(`模板已填：${clazz}.${method}`);
+}
 
 async function onAddProbe() {
   if (!form.clazz.trim() || !form.method.trim()) {
@@ -179,6 +187,7 @@ function statusLight(s: ProbeStat["status"]) {
       <div class="probe-tab" :class="{ 'probe-tab--active': tab === 'probes' }" @click="tab = 'probes'">探针工作台</div>
       <div class="probe-tab" :class="{ 'probe-tab--active': tab === 'explorer' }" @click="tab = 'explorer'">探索器</div>
       <div class="probe-tab" :class="{ 'probe-tab--active': tab === 'repl' }" @click="tab = 'repl'">REPL</div>
+      <div class="probe-tab" :class="{ 'probe-tab--active': tab === 'deep' }" @click="tab = 'deep'">深度/脚本</div>
       <div style="flex: 1" />
       <NButton size="tiny" quaternary :loading="probe.statsLoading" @click="probe.refreshStats()">刷新状态</NButton>
     </div>
@@ -205,6 +214,13 @@ function statusLight(s: ProbeStat["status"]) {
         placeholder="可选命中条件（js 表达式，如 arguments[0].length > 4；留空 = 全部命中）"
         style="margin-top: 8px"
       />
+      <div class="connect-row" style="margin-top: 8px">
+        <span class="muted" style="font-size: 11px">模板：</span>
+        <NButton size="tiny" quaternary @click="fillTemplate('javax.crypto.Cipher', 'doFinal')">加密出口 Cipher.doFinal</NButton>
+        <NButton size="tiny" quaternary @click="fillTemplate('javax.crypto.spec.SecretKeySpec', '$init')">密钥生成 SecretKeySpec</NButton>
+        <NButton size="tiny" quaternary @click="fillTemplate('net.zetetic.database.sqlcipher.SQLiteDatabase', '$init')">SQLCipher 开库</NButton>
+        <NButton size="tiny" quaternary @click="fillTemplate('java.net.URL', '$init')">URL 访问</NButton>
+      </div>
 
       <h3 style="margin-top: 18px">已挂探针（{{ probe.probes.length }}）</h3>
       <table class="plain-table">
@@ -309,6 +325,9 @@ function statusLight(s: ProbeStat["status"]) {
         </table>
       </div>
     </div>
+
+    <!-- ============ 深度/脚本 ============ -->
+    <DeepConsole v-else-if="tab === 'deep'" />
 
     <!-- ============ REPL ============ -->
     <div v-else class="card info-card">

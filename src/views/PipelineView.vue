@@ -23,6 +23,8 @@ import SessionConsole from "@/components/SessionConsole.vue";
 import RecorderCard from "@/components/RecorderCard.vue";
 import ProbeConsole from "@/components/ProbeConsole.vue";
 import InjectionWizard from "@/components/InjectionWizard.vue";
+import ProfileEditor from "@/components/ProfileEditor.vue";
+import { ref as vueRef } from "vue";
 import RestoreConsole from "@/components/RestoreConsole.vue";
 import LedgerConsole from "@/components/LedgerConsole.vue";
 
@@ -32,6 +34,10 @@ const settings = useSettingsStore();
 const message = useMessage();
 
 const activeNode = computed(() => pipeline.selectedNode);
+const injRef = vueRef<InstanceType<typeof InjectionWizard> | null>(null);
+function applyProfile(pkg: string, dir: string) {
+  injRef.value?.applyProfile(pkg, dir);
+}
 
 const NODE_ICONS: Record<string, typeof PulseOutline> = {
   doctor: PulseOutline,
@@ -336,7 +342,8 @@ onMounted(() => {
           </div>
         </div>
       </div>
-      <InjectionWizard />
+      <InjectionWizard ref="injRef" />
+      <ProfileEditor @apply="(pkg: string, dir: string) => applyProfile(pkg, dir)" />
     </template>
 
     <!-- ============ 节点7：还原（M4） ============ -->

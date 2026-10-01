@@ -27,6 +27,15 @@ import {
   scanMemory,
 } from "./native";
 import { complete, evaluate } from "./repl";
+import {
+  chooseInstancesDetailed,
+  dumpDex,
+  invokeOnInstance,
+  sslStats,
+  watchDlopen,
+  watchRegisterNatives,
+  watchSsl,
+} from "./extras";
 
 // ---------------- console 猴子补丁（分级 send） ----------------
 
@@ -78,6 +87,13 @@ interface RpcExports {
   readMem(q: { address: string; size: number }): unknown;
   replEval(q: { code: string }): unknown;
   replComplete(q: { code: string; cursor: number }): unknown;
+  watchDlopen(): unknown;
+  watchRegisterNatives(): unknown;
+  dumpDex(q: { maxDex: number }): unknown;
+  watchSsl(q: { id: string; maxBuf: number }): unknown;
+  sslStats(): unknown;
+  chooseDetailed(q: { className: string; limit: number }): unknown;
+  invokeInstance(q: { className: string; hashCode: number; methodName: string; args: string[] }): unknown;
 }
 
 const api: RpcExports = {
@@ -100,6 +116,13 @@ const api: RpcExports = {
   readMem: (q) => readMem(q.address, q.size),
   replEval: (q) => evaluate(q.code),
   replComplete: (q) => complete(q.code, q.cursor),
+  watchDlopen: () => watchDlopen(),
+  watchRegisterNatives: () => watchRegisterNatives(),
+  dumpDex: (q) => dumpDex(q.maxDex),
+  watchSsl: (q) => watchSsl(q.id, q.maxBuf),
+  sslStats: () => sslStats(),
+  chooseDetailed: (q) => chooseInstancesDetailed(q.className, q.limit),
+  invokeInstance: (q) => invokeOnInstance(q.className, q.hashCode, q.methodName, q.args),
 };
 
 rpc.exports = api as unknown as Record<string, unknown>;

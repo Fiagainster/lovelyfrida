@@ -5,6 +5,7 @@ pub mod first_run;
 pub mod experiment;
 pub mod brute;
 pub mod crypto;
+pub mod extras_svc;
 pub mod injection;
 pub mod ledger;
 pub mod recorder;

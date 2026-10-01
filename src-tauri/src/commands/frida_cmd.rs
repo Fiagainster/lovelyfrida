@@ -3,6 +3,7 @@ use crate::services::experiment::{ExperimentConfig, ExperimentReport};
 use crate::services::brute::{estimate as brute_estimate_fn, generate_c_skeleton, run_builtin as brute_run_fn, BruteEstimate, BruteResult};
 use crate::services::crypto::{reconstruct as crypto_reconstruct_fn, ReconstructResult, Sample};
 use crate::services::injection::{InjectionFile, InjectionReport};
+use crate::services::extras_svc as ex;
 use crate::services::ledger::{self as ledger_svc, EvidenceItem, Finding};
 use crate::services::recorder::RecorderState;
 use crate::services::session::{
@@ -287,4 +288,56 @@ pub async fn ledger_export_md(case_name: String) -> Result<String, String> {
 #[tauri::command]
 pub async fn ledger_export_bundle(case_name: String) -> Result<String, String> {
     ledger_svc::export_bundle(&case_name)
+}
+
+// ---------- 能力包 B/D：脚本库 + AppProfile ----------
+
+#[tauri::command]
+pub async fn script_list() -> Result<Vec<ex::ScriptInfo>, String> { ex::script_list() }
+
+#[tauri::command]
+pub async fn script_read(name: String) -> Result<String, String> { ex::script_read(&name) }
+
+#[tauri::command]
+pub async fn script_save(name: String, content: String) -> Result<String, String> { ex::script_save(&name, &content) }
+
+#[tauri::command]
+pub async fn script_delete(name: String) -> Result<(), String> { ex::script_delete(&name) }
+
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn profile_save(
+    caseName: String, id: Option<i64>, package: String, uid: Option<i64>,
+    apkPath: String, dataDirs: String, secretFiles: String, secretTransform: String,
+    entryGesture: String, entryCoords: String, probeTargets: String, notes: String,
+) -> Result<i64, String> {
+    ex::profile_save(&caseName, id, &package, uid, &apkPath, &dataDirs, &secretFiles,
+        &secretTransform, &entryGesture, &entryCoords, &probeTargets, &notes)
+}
+
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn profile_list(caseName: String) -> Result<Vec<ex::AppProfile>, String> {
+    ex::profile_list(&caseName)
+}
+
+#[tauri::command]
+pub async fn profile_delete(id: i64) -> Result<(), String> { ex::profile_delete(id) }
+
+#[tauri::command]
+pub async fn dumps_list() -> Result<Vec<serde_json::Value>, String> {
+    let cfg = crate::config::get();
+    let dir = crate::paths::cases_root(&cfg).join("dumps");
+    let mut out = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for e in entries.flatten() {
+            if let Ok(meta) = e.metadata() {
+                out.push(serde_json::json!({
+                    "name": e.file_name().to_string_lossy(),
+                    "size": meta.len(),
+                }));
+            }
+        }
+    }
+    Ok(out)
 }

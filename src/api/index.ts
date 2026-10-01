@@ -263,6 +263,17 @@ export const api = {
   ledgerExportMd: (caseName: string) => invoke<string>("ledger_export_md", { caseName }),
   ledgerExportBundle: (caseName: string) => invoke<string>("ledger_export_bundle", { caseName }),
 
+  // 能力包 A/B/D
+  fridaRpcRaw: (f: string, args: unknown[]) => invoke<unknown>("frida_rpc", { f, args }),
+  scriptList: () => invoke<ScriptInfo[]>("script_list"),
+  scriptRead: (name: string) => invoke<string>("script_read", { name }),
+  scriptSave: (name: string, content: string) => invoke<string>("script_save", { name, content }),
+  scriptDelete: (name: string) => invoke<void>("script_delete", { name }),
+  profileSave: (p: ProfilePayload) => invoke<number>("profile_save", p),
+  profileList: (caseName: string) => invoke<AppProfileRow[]>("profile_list", { caseName }),
+  profileDelete: (id: number) => invoke<void>("profile_delete", { id }),
+  dumpsList: () => invoke<{ name: string; size: number }[]>("dumps_list"),
+
   // M3：回灌 + 实验
   injectionRun: (package_: string, files: { localPath: string; deviceDir: string; deviceName: string }[]) =>
     invoke<InjectionReport>("injection_run", { package: package_, files }),
@@ -418,4 +429,31 @@ export interface Finding {
   evidence: { kind: "math" | "device"; note: string }[];
   source: string;
   screenshot_slot: string;
+}
+
+// ---------- 能力包 ----------
+
+export interface ScriptInfo {
+  name: string;
+  size: number;
+  modified: string;
+}
+
+export interface ProfilePayload extends Record<string, unknown> {
+  caseName: string;
+  id?: number;
+  package: string;
+  uid?: number | null;
+  apkPath: string;
+  dataDirs: string;
+  secretFiles: string;
+  secretTransform: string;
+  entryGesture: string;
+  entryCoords: string;
+  probeTargets: string;
+  notes: string;
+}
+
+export interface AppProfileRow extends ProfilePayload {
+  id: number;
 }

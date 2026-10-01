@@ -75,8 +75,56 @@ impl TraceState {
 }
 
 /// 事件入口：命中/错误/console 三类写入 trace；其余忽略。
-pub fn on_agent_message(app: &tauri::AppHandle, trace: &TraceState, payload: &Value, script_id: u64) {
+pub fn on_agent_message(
+    app: &tauri::AppHandle,
+    trace: &TraceState,
+    payload: &Value,
+    script_id: u64,
+    data_b64: &Option<String>,
+) {
     let t = payload.get("t").and_then(|v| v.as_str()).unwrap_or("");
+    // dex_dump：内存 dex 落盘（脱壳辅助）
+    if t == "dex_dump" && data_b64.is_some() {
+        use base64::Engine;
+        let base = payload.get("base").and_then(|v| v.as_str()).unwrap_or("unknown");
+        let dir = {
+            let c = crate::config::get();
+            crate::paths::cases_root(&c).join("dumps")
+        };
+        let _ = std::fs::create_dir_all(&dir);
+        let fname = format!("dex-{}.dex", base.replace("0x", ""));
+        let path = dir.join(&fname);
+        if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(data_b64.as_ref().unwrap()) {
+            if std::fs::write(&path, &bytes).is_ok() {
+                tracing::info!("[dex] 落盘 {} ({} bytes)", path.display(), bytes.len());
+                let _ = app.emit("dex-dumped", serde_json::json!({"path": path.display().to_string(), "size": bytes.len(), "base": base}));
+                crate::audit::audit("dex_dump", &path.display().to_string(), "done", "probe-lab", &format!("{} bytes", bytes.len()));
+            }
+        }
+        return;
+    }
+    // dlopen / register_natives / ssl_data 进时间轴（结构化观测）
+    if matches!(t, "dlopen" | "register_natives" | "ssl_data") {
+        let guard = trace.run.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(run) = guard.as_ref() {
+            let seq = SEQ.fetch_add(1, Ordering::SeqCst);
+            let rec = TraceRecord {
+                seq,
+                wall: chrono::Local::now().format("%H:%M:%S%.3f").to_string(),
+                run_id: run.id.clone(),
+                payload: payload.clone(),
+            };
+            if let Ok(mut f) = run.file.lock() {
+                use std::io::Write;
+                if let Ok(line) = serde_json::to_string(&rec) {
+                    let _ = writeln!(f, "{line}");
+                }
+            }
+            drop(guard);
+            let _ = app.emit("trace-event", rec);
+        }
+        return;
+    }
     if !matches!(t, "probe_hit" | "probe_error" | "console") {
         return;
     }

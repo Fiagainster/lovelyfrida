@@ -571,8 +571,8 @@ pub async fn forward_events(
                 match rx.recv().await {
                     Ok(ev) => {
                         let v = serde_json::to_value(&ev).unwrap_or(Value::Null);
-                        if let FridaEvent::Message { script_id, payload, .. } = &ev {
-                            crate::services::trace::on_agent_message(&handle, &trace, payload.as_ref().unwrap_or(&Value::Null), *script_id);
+                        if let FridaEvent::Message { script_id, payload, data_b64, .. } = &ev {
+                            crate::services::trace::on_agent_message(&handle, &trace, payload.as_ref().unwrap_or(&Value::Null), *script_id, data_b64);
                         }
                         let _ = handle.emit("frida-event", v);
                         if let FridaEvent::Detached { reason, .. } = &ev {
