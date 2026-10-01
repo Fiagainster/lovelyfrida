@@ -25,28 +25,28 @@
   --grad-accent-soft: linear-gradient(135deg, rgba(59, 130, 246, 0.16), rgba(139, 92, 246, 0.16));
 }
 
-/* ---------- 深色（默认） ---------- */
+/* ---------- 深色（默认，LovelyMem 风格精修） ---------- */
 :root[data-theme="dark"] {
-  --bg-base: #0d1117;
-  --bg-panel: #151b23;
-  --bg-elevated: #1b232d;
-  --bg-hover: rgba(255, 255, 255, 0.055);
-  --bg-input: #0a0e13;
-  --bg-titlebar: #0a0d12;
-  --bg-statusbar: #0a0d12;
+  --bg-base: #0c1017;
+  --bg-panel: #141a24;
+  --bg-elevated: #1a2230;
+  --bg-hover: rgba(100, 150, 255, 0.06);
+  --bg-input: #0a0e15;
+  --bg-titlebar: #090d13;
+  --bg-statusbar: #090d13;
 
-  --text-1: #e9edf3;
-  --text-2: #a8b3bf;
-  --text-3: #66707d;
+  --text-1: #e4eaf4;
+  --text-2: #9aa8bd;
+  --text-3: #5f6b80;
 
-  --border-1: #232b35;
-  --border-2: #313b47;
+  --border-1: #1e2836;
+  --border-2: #2c3a50;
 
-  --accent: #4d8dff;
-  --accent-soft: rgba(77, 141, 255, 0.14);
+  --accent: #58a6ff;
+  --accent-soft: rgba(88, 166, 255, 0.12);
 
-  --shadow-1: 0 1px 3px rgba(0, 0, 0, 0.35);
-  --shadow-2: 0 8px 28px rgba(0, 0, 0, 0.45);
+  --shadow-1: 0 1px 4px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 8px 32px rgba(0, 0, 0, 0.5);
 
   /* 六态状态色（语义全场统一） */
   --st-pending: #6b7684;
@@ -162,11 +162,16 @@ body {
   animation: pulse-ring 1.5s infinite;
 }
 
-/* 通用卡片 */
+/* 通用卡片（LovelyMem 风格 hover 提亮） */
 .card {
   background: var(--bg-panel);
   border: 1px solid var(--border-1);
   border-radius: var(--radius-md);
+  transition: border-color var(--trans-fast), box-shadow var(--trans-fast);
+}
+.card:hover {
+  border-color: var(--border-2);
+  box-shadow: var(--shadow-1);
 }
 
 /* 渐变主按钮（naive primary 的皮肤增强） */
@@ -174,12 +179,15 @@ body {
   background: var(--grad-accent) !important;
   border: none !important;
   color: #fff !important;
-  box-shadow: 0 2px 10px rgba(80, 120, 255, 0.35);
-  transition: filter var(--trans-fast), transform var(--trans-fast);
+  font-weight: 600;
+  box-shadow: 0 2px 12px rgba(80, 120, 255, 0.4);
+  transition: filter var(--trans-fast), transform var(--trans-fast), box-shadow var(--trans-fast);
 }
 .btn-hero:hover {
-  filter: brightness(1.1);
+  filter: brightness(1.12);
+  box-shadow: 0 4px 18px rgba(80, 120, 255, 0.5);
 }
 .btn-hero:active {
   transform: translateY(1px);
+  box-shadow: 0 1px 4px rgba(80, 120, 255, 0.3);
 }

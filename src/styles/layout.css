@@ -174,11 +174,12 @@
   content: "";
   position: absolute;
   left: -8px;
-  top: 6px;
-  bottom: 6px;
+  top: 4px;
+  bottom: 4px;
   width: 3px;
   border-radius: 2px;
   background: var(--grad-accent);
+  box-shadow: 0 0 6px rgba(80, 120, 255, 0.5);
 }
 .pipeline-node__index {
   font-size: 10px;
