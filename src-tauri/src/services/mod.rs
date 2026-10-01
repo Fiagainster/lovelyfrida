@@ -3,6 +3,8 @@
 pub mod doctor;
 pub mod first_run;
 pub mod experiment;
+pub mod brute;
+pub mod crypto;
 pub mod injection;
 pub mod recorder;
 pub mod session;

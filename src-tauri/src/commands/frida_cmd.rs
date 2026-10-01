@@ -1,5 +1,7 @@
 use crate::backends::adb::AdbBackend;
 use crate::services::experiment::{ExperimentConfig, ExperimentReport};
+use crate::services::brute::{estimate as brute_estimate_fn, generate_c_skeleton, run_builtin as brute_run_fn, BruteEstimate, BruteResult};
+use crate::services::crypto::{reconstruct as crypto_reconstruct_fn, ReconstructResult, Sample};
 use crate::services::injection::{InjectionFile, InjectionReport};
 use crate::services::recorder::RecorderState;
 use crate::services::session::{
@@ -190,4 +192,62 @@ pub async fn experiment_run(
 ) -> Result<ExperimentReport, String> {
     let cfg = crate::config::get();
     crate::services::experiment::run(&cfg, &state.channel, Some(&state), exp).await
+}
+
+/// 算法还原（文档04-F / U4）：两组样本防假命中
+#[tauri::command]
+pub async fn crypto_reconstruct(samples: Vec<Sample>) -> Result<ReconstructResult, String> {
+    Ok(crypto_reconstruct_fn(&samples))
+}
+
+/// 爆破预估三件套（文档04-G）
+#[tauri::command]
+pub async fn brute_estimate(scheme: crate::services::crypto::Scheme, mask: String) -> Result<BruteEstimate, String> {
+    Ok(brute_estimate_fn(&mask, &scheme))
+}
+
+/// 内置爆破（小空间；★自测不过不许跑 C-07）
+#[tauri::command]
+pub async fn brute_run(
+    recorder: tauri::State<'_, RecorderState>,
+    scheme: crate::services::crypto::Scheme,
+    mask: String,
+    salt: String,
+    known: Sample,
+    max_candidates: Option<u64>,
+) -> Result<BruteResult, String> {
+    let t0 = std::time::Instant::now();
+    let r = brute_run_fn(&scheme, &mask, &salt, &known, max_candidates.unwrap_or(5_000_000));
+    crate::services::recorder::record_cmd(
+        &recorder,
+        "内置爆破",
+        &format!("brute（mask={mask}, family={}）", scheme.family),
+        serde_json::json!({ "mask": mask }),
+        match &r.hit {
+            Some(h) => format!("HIT pwd={h}"),
+            None => format!("未命中（{}）", r.note),
+        },
+        t0.elapsed().as_millis() as u64,
+    )
+    .await;
+    Ok(r)
+}
+
+/// 生成 C 专用爆破器骨架（无 hashcat 模式场景）
+#[tauri::command]
+pub async fn brute_generate_c(
+    scheme: crate::services::crypto::Scheme,
+    sample: Sample,
+) -> Result<serde_json::Value, String> {
+    let c = generate_c_skeleton(&scheme, &sample);
+    let dir = {
+        let cfg = crate::config::get();
+        crate::paths::cases_root(&cfg).join("jobs")
+    };
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let ts = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    let path = dir.join(format!("brute-{ts}.c"));
+    std::fs::write(&path, c).map_err(|e| e.to_string())?;
+    crate::audit::audit("brute_generate_c", &path.display().to_string(), "done", "restore-node", &scheme.family);
+    Ok(serde_json::json!({ "path": path.display().to_string() }))
 }

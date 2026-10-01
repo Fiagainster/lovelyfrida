@@ -242,6 +242,16 @@ export const api = {
     invoke<void>("terminal_resize", { id, cols, rows }),
   terminalClose: (id: number) => invoke<void>("terminal_close", { id }),
 
+  // M4：算法还原 + 爆破
+  cryptoReconstruct: (samples: { plaintext: string; salt: string; target: string }[]) =>
+    invoke<CryptoReconstructResult>("crypto_reconstruct", { samples }),
+  bruteEstimate: (scheme: CryptoScheme, mask: string) =>
+    invoke<BruteEstimate>("brute_estimate", { scheme, mask }),
+  bruteRun: (scheme: CryptoScheme, mask: string, salt: string, known: CryptoSample, maxCandidates?: number) =>
+    invoke<BruteResult>("brute_run", { scheme, mask, salt, known, maxCandidates }),
+  bruteGenerateC: (scheme: CryptoScheme, sample: CryptoSample) =>
+    invoke<{ path: string }>("brute_generate_c", { scheme, sample }),
+
   // M3：回灌 + 实验
   injectionRun: (package_: string, files: { localPath: string; deviceDir: string; deviceName: string }[]) =>
     invoke<InjectionReport>("injection_run", { package: package_, files }),
@@ -341,4 +351,48 @@ export interface ExperimentReport {
   experiment_id: string;
   observations: Observation[];
   errors: string[];
+}
+
+// ---------- M4：算法还原 / 爆破 ----------
+
+export interface CryptoSample {
+  plaintext: string;
+  salt: string;
+  target: string;
+}
+
+export interface CryptoScheme {
+  family: string;
+  concat: string;
+  saltForm: string;
+  chainInput: string;
+  iterations: number;
+  outputEncoding: string;
+}
+
+export interface CryptoReconstructResult {
+  scheme: CryptoScheme | null;
+  candidates: CryptoScheme[];
+  selfTestPassed: boolean;
+  humanDesc: string;
+  pythonSkeleton: string;
+  hashcatMode: string | null;
+  hashcatCmd: string | null;
+  error: string | null;
+}
+
+export interface BruteEstimate {
+  total: number;
+  est_speed: number;
+  eta_seconds: number;
+  engine: "builtin" | "hashcat" | "generate_c";
+  reason: string;
+}
+
+export interface BruteResult {
+  self_test_passed: boolean;
+  hit: string | null;
+  tried: number;
+  duration_ms: number;
+  note: string;
 }

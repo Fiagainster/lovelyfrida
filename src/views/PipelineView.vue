@@ -23,6 +23,7 @@ import SessionConsole from "@/components/SessionConsole.vue";
 import RecorderCard from "@/components/RecorderCard.vue";
 import ProbeConsole from "@/components/ProbeConsole.vue";
 import InjectionWizard from "@/components/InjectionWizard.vue";
+import RestoreConsole from "@/components/RestoreConsole.vue";
 
 /** 主视图：流水线（M0 = 环境体检 + 设备连接两个节点可用） */
 const pipeline = usePipelineStore();
@@ -335,6 +336,22 @@ onMounted(() => {
         </div>
       </div>
       <InjectionWizard />
+    </template>
+
+    <!-- ============ 节点7：还原（M4） ============ -->
+    <template v-else-if="activeNode === 'restore'">
+      <div class="view-head">
+        <div class="view-head__title">
+          <div class="view-head__icon"><ConstructOutline size="18" /></div>
+          <div>
+            <h2>还原</h2>
+            <div class="view-head__sub">
+              算法还原（穷举+双样本防假命中）→ 爆破编排（★自测不过不许全量）→ 命中后真机验证（双证据闭环）
+            </div>
+          </div>
+        </div>
+      </div>
+      <RestoreConsole />
     </template>
 
     <!-- ============ 其余节点：里程碑占位 ============ -->
