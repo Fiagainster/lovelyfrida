@@ -118,7 +118,7 @@ impl AdbBackend {
         // server 亲和（E-01/E-04 变体）：多个 adb 二进制版本不一致时会互相 kill/restart
         // 对方的 server（实测一次安装链因此拖到 4 分钟）。若已有 server 在运行，
         // 优先选用同一个二进制。
-        if let Some(server_path) = query_running_server_path() {
+        if let Some(server_path) = query_running_server_path().await {
             let idx = candidates
                 .iter()
                 .position(|c| c.exists && c.path.eq_ignore_ascii_case(&server_path));
@@ -414,7 +414,8 @@ fn scan_mumu_adb() -> Vec<PathBuf> {
 
 /// 查询正在运行的 adb server 的可执行文件路径（adb.exe 存活进程即 server；
 /// 客户端进程转瞬即逝）。结果缓存 30s。失败返回 None。
-fn query_running_server_path() -> Option<String> {
+/// PowerShell CIM 查询可达秒级：走 tokio 进程，不阻塞 worker（P1-5）。
+async fn query_running_server_path() -> Option<String> {
     use std::sync::OnceLock;
     use std::time::Instant;
     static CACHE: OnceLock<std::sync::Mutex<Option<(String, Instant)>>> = OnceLock::new();
@@ -427,7 +428,7 @@ fn query_running_server_path() -> Option<String> {
         }
     }
     let out = {
-        let mut cmd = std::process::Command::new("powershell");
+        let mut cmd = quiet_command("powershell");
         cmd.args([
             "-NoProfile",
             "-Command",
@@ -435,12 +436,7 @@ fn query_running_server_path() -> Option<String> {
         ])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x0800_0000);
-        }
-        cmd.output().ok()?
+        cmd.output().await.ok()?
     };
     let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
     if text.is_empty() {

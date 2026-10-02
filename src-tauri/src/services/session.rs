@@ -385,8 +385,8 @@ pub async fn attach(
         let _ = app.emit("session-state", s.clone());
     }
 
-    let adb = AdbBackend::detect(&cfg.adb_path, &cfg.doctor.adb_extra_paths).await?;
-    let devices = adb.devices().await?;
+    let adb = attach_step(app, state, AdbBackend::detect(&cfg.adb_path, &cfg.doctor.adb_extra_paths).await, "adb 探测失败").await?;
+    let devices = attach_step(app, state, adb.devices().await, "枚举设备失败").await?;
     let Some(serial) = devices.iter().find(|d| d.state == "device").map(|d| d.serial.clone())
     else {
         return fail(app, state, "无 device 状态设备").await;
@@ -406,7 +406,7 @@ pub async fn attach(
             s.evidence.push(format!("设备端 :{} 未监听 → 自动执行安装链", cfg.frida_port));
             s.clone()
         });
-        let steps = server_install(cfg, &state.channel).await?;
+        let steps = attach_step(app, state, server_install(cfg, &state.channel).await, "frida-server 安装链执行失败").await?;
         if steps.iter().any(|s| s.status == "fail") {
             return fail(app, state, "frida-server 自动安装失败（见安装报告）").await;
         }
@@ -418,7 +418,7 @@ pub async fn attach(
         let _ = app.emit("session-state", s.clone());
     }
 
-    let fwd = forward_setup(cfg, &adb, &serial).await?;
+    let fwd = attach_step(app, state, forward_setup(cfg, &adb, &serial).await, "adb forward 建立失败").await?;
     if fwd.step.status == "fail" {
         return fail(app, state, "adb forward 建立失败").await;
     }
@@ -431,11 +431,16 @@ pub async fn attach(
     }
 
     // 事件订阅必须在 attach 之前建立（broadcast 不回放历史）
-    let mut rx = state.channel.subscribe().await?;
+    let mut rx = attach_step(app, state, state.channel.subscribe().await, "事件通道订阅失败").await?;
 
     let host_port = state.session.lock().await.forward_host_port.unwrap_or(cfg.frida_port);
-    let (session_id, script_id) =
-        attach_and_load_core(&state.channel, "127.0.0.1", host_port, target.clone()).await?;
+    let (session_id, script_id) = attach_step(
+        app,
+        state,
+        attach_and_load_core(&state.channel, "127.0.0.1", host_port, target.clone()).await,
+        "attach / 加载 core agent 失败",
+    )
+    .await?;
 
     {
         let mut s = state.session.lock().await;
@@ -514,14 +519,35 @@ async fn fail(app: &tauri::AppHandle, state: &FridaState, msg: &str) -> Result<S
     Err(msg.to_string())
 }
 
+/// attach 链路的步骤错误统一过 fail()：phase 必须落到 Failed，不允许 `?` 直穿把会话留在中间态
+async fn attach_step<T>(
+    app: &tauri::AppHandle,
+    state: &FridaState,
+    r: Result<T, String>,
+    what: &str,
+) -> Result<T, String> {
+    match r {
+        Ok(v) => Ok(v),
+        Err(e) => match fail(app, state, &format!("{what}：{e}")).await {
+            Err(msg) => Err(msg),
+            Ok(_) => unreachable!("fail 必定返回 Err"),
+        },
+    }
+}
+
 pub async fn detach(app: &tauri::AppHandle, state: &FridaState) -> Result<SessionSnapshot, String> {
     let mut s = state.session.lock().await;
-    let errors: Vec<String> = Vec::new();
+    // 分离是尽力而为的清理：单步失败不阻断后续步骤，但必须留痕而不是吞掉
+    let mut errors: Vec<String> = Vec::new();
     if let Some(script_id) = s.script_id {
-        let _ = state.channel.call("unload_script", json!({"script_id": script_id})).await;
+        if let Err(e) = state.channel.call("unload_script", json!({"script_id": script_id})).await {
+            errors.push(format!("卸载脚本 script#{script_id} 失败：{e}"));
+        }
     }
     if let Some(session_id) = s.session_id {
-        let _ = state.channel.call("detach", json!({"session_id": session_id})).await;
+        if let Err(e) = state.channel.call("detach", json!({"session_id": session_id})).await {
+            errors.push(format!("detach session#{session_id} 失败：{e}"));
+        }
     }
     s.phase = SessionPhase::Stopped;
     s.session_id = None;
@@ -535,8 +561,9 @@ pub async fn detach(app: &tauri::AppHandle, state: &FridaState) -> Result<Sessio
         }
     }
     if !errors.is_empty() {
-        s.evidence.extend(errors);
+        crate::audit::audit("session_detach", "app", "warn", "session-console", &errors.join("；"));
     }
+    s.evidence.extend(errors);
     s.updated_at = chrono::Local::now().format("%H:%M:%S%.3f").to_string();
     let snap = s.clone();
     let _ = app.emit("session-state", snap.clone());

@@ -7,7 +7,7 @@ export const useTerminalStore = defineStore("terminal", () => {
   const sessions = ref<TerminalInfo[]>([]);
   const activeId = ref<number | null>(null);
   const drawerOpen = ref(false);
-  const lastSerial = ref("127.0.0.1:15555");
+  const lastSerial = ref("127.0.0.1:16384");
 
   // id → 前端 xterm 数据回调（组件挂载时注册）
   const dataHandlers = new Map<number, (b64: string) => void>();

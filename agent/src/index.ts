@@ -127,12 +127,14 @@ const api: RpcExports = {
 
 rpc.exports = api as unknown as Record<string, unknown>;
 
-// ping 回路保留（M1 自检用）
-recv("ping", function (this: unknown, message: unknown) {
+// ping 回路保留（M1 自检用）。recv 是一次性注册，须在回调里重新挂；
+// 不能用 arguments.callee（esbuild 产物为严格模式，访问即抛 TypeError，第二个 ping 起失联）
+function onPing(message: unknown): void {
   const data = (message as { data?: unknown })?.data ?? null;
   send({ t: "pong", echo: data });
-  recv("ping", arguments.callee as never);
-});
+  recv("ping", onPing);
+}
+recv("ping", onPing);
 
 // REPL 需要 Java 全局可见（模块作用域内 import，挂到 globalThis 供 eval 使用）
 if (Java.available) {

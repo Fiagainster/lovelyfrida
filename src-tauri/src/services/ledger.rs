@@ -166,6 +166,8 @@ pub fn export_markdown(case_name: &str) -> Result<String, String> {
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let ts = chrono::Local::now().format("%Y%m%d-%H%M%S");
     let path = dir.join(format!("{case_name}-findings-{ts}.md"));
+    // 写路径过 guard（P1-1）：导出目标不得落在检材只读根
+    crate::guard::guard_write_or_err(&path)?;
     std::fs::write(&path, md).map_err(|e| e.to_string())?;
     crate::audit::audit("ledger_export_md", &path.display().to_string(), "done", "ledger", case_name);
     Ok(path.display().to_string())
@@ -177,6 +179,8 @@ pub fn export_bundle(case_name: &str) -> Result<String, String> {
     let cases_root = crate::paths::cases_root(&cfg);
     let ts = chrono::Local::now().format("%Y%m%d-%H%M%S");
     let bundle = cases_root.join("exports").join(format!("{case_name}-bundle-{ts}"));
+    // 写路径过 guard（P1-1）
+    crate::guard::guard_write_or_err(&bundle)?;
     std::fs::create_dir_all(&bundle).map_err(|e| e.to_string())?;
 
     // findings.md

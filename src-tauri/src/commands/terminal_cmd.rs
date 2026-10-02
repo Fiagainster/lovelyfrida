@@ -55,7 +55,7 @@ pub async fn recorder_export(
     state: State<'_, RecorderState>,
     format: String,
 ) -> Result<ExportResult, String> {
-    export(&state, &format)
+    export(&state, &format).await
 }
 
 #[tauri::command]

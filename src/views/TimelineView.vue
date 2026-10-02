@@ -10,13 +10,18 @@ import type { TraceRecord } from "@/api";
 const probe = useProbeStore();
 const session = useSessionStore();
 
-const paused = ref(false);
-
-function togglePause() {
-  paused.value = !paused.value;
+interface TimelineRow {
+  seq: number;
+  wall: string;
+  kind: string;
+  target: string;
+  args: { k: string; v: string }[];
+  ret: { k: string; v: string } | null;
+  thread: number;
+  raw: unknown;
 }
 
-const rows = computed(() =>
+const liveRows = computed<TimelineRow[]>(() =>
   probe.trace.slice(0, 300).map((r: TraceRecord) => {
     const p = r.payload;
     const args = (p.args as { k: string; v: string }[] | undefined) ?? [];
@@ -32,6 +37,17 @@ const rows = computed(() =>
     };
   }),
 );
+
+// 真暂停：事件照常写入 probe.trace 环形缓冲（不丢数据），仅冻结本视图渲染
+const paused = ref(false);
+const frozenRows = ref<TimelineRow[]>([]);
+
+function togglePause() {
+  if (!paused.value) frozenRows.value = liveRows.value;
+  paused.value = !paused.value;
+}
+
+const rows = computed(() => (paused.value ? frozenRows.value : liveRows.value));
 
 const detail = ref<(typeof rows.value)[number] | null>(null);
 
@@ -55,6 +71,7 @@ onMounted(() => {
           <div class="view-head__sub">
             探针触发流 · {{ probe.trace.length }} 条（内存保留 3000，全量落
             cases/traces/*.jsonl）· 点行下钻
+            <span v-if="paused" style="color: var(--warn, #e3b341)">· 已暂停（后台仍在记录，点「继续」恢复实时）</span>
           </div>
         </div>
       </div>

@@ -3,11 +3,13 @@ import { computed, onMounted, reactive, ref } from "vue";
 import { NButton, NInput, NInputNumber, NTag, useMessage } from "naive-ui";
 import { SaveOutline, TrashOutline } from "@vicons/ionicons5";
 import { api, type AppProfileRow } from "@/api";
+import { useCaseStore } from "@/stores/case";
 
 /** AppProfile（U9：一次录好复用）——数据回灌节点的档案编辑器 */
 const message = useMessage();
-
-const caseName = computed(() => "默认案");
+const caseStore = useCaseStore();
+// 案件名与台账共用全局单一真源，档案和 Findings 才能落同一个 case（调用处走 caseStore.apiCaseName()）
+const caseName = computed(() => caseStore.caseName);
 const profiles = ref<AppProfileRow[]>([]);
 const editingId = ref<number | null>(null);
 
@@ -53,13 +55,13 @@ function resetForm() {
 }
 
 async function refresh() {
-  profiles.value = await api.profileList(caseName.value);
+  profiles.value = await api.profileList(caseStore.apiCaseName());
 }
 
 async function onSave() {
   try {
     await api.profileSave({
-      caseName: caseName.value,
+      caseName: caseStore.apiCaseName(),
       id: editingId.value ?? undefined,
       package: form.package.trim(),
       uid: form.uid,
@@ -101,6 +103,7 @@ onMounted(refresh);
     <h3>
       AppProfile（目标档案）
       <NTag size="small" :bordered="false">U9：一次录好复用</NTag>
+      <NTag size="small" type="info" :bordered="false">案件：{{ caseName }}</NTag>
     </h3>
     <div class="connect-row" style="margin-bottom: 8px; flex-wrap: wrap">
       <NInput v-model:value="form.package" size="small" placeholder="包名 *" style="width: 240px" />
@@ -117,7 +120,7 @@ onMounted(refresh);
       <NInput v-model:value="form.entryCoords" size="small" placeholder="关键坐标（JSON）" style="flex: 1" />
     </div>
     <div class="connect-row" style="margin-bottom: 8px; flex-wrap: wrap">
-      <NInput v-model:value="form.probeTargets" size="small" placeholder="探针目标（如 AESUtil.hashPassword）" style="flex: 1" />
+      <NInput v-model:value="form.probeTargets" size="small" placeholder="探针目标（如 包名.ClassName.methodName，逗号分隔）" style="flex: 1" />
       <NInput v-model:value="form.notes" size="small" placeholder="备注" style="flex: 1" />
     </div>
     <div class="connect-row">

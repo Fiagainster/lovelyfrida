@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useAppStore, VIEW_DEFS } from "@/stores/app";
 import { usePipelineStore } from "@/stores/pipeline";
 import { useTerminalStore } from "@/stores/terminal";
+import { api } from "@/api";
 
 /** 底部状态栏（文档03）：就绪状态 / 探针计数(M2) / 视图索引 / ⌘K 提示 */
 const app = useAppStore();
@@ -15,6 +16,16 @@ const viewName = computed(
 const deviceText = computed(() =>
   pipeline.deviceSerial ? `设备 ${pipeline.deviceSerial}` : "无设备",
 );
+
+// 版本号取自应用信息（tauri.conf / Cargo.toml），不再手写里程碑标签
+const version = ref("");
+onMounted(async () => {
+  try {
+    version.value = (await api.getAppInfo()).version;
+  } catch {
+    /* 浏览器预览模式下不可用，留空即可 */
+  }
+});
 </script>
 
 <template>
@@ -38,6 +49,6 @@ const deviceText = computed(() =>
       终端 {{ terminal.sessions.length > 0 ? `(${terminal.sessions.length})` : "" }}
     </span>
     <span class="statusbar__hint">|</span>
-    <span class="statusbar__hint">v0.1.0 M1</span>
+    <span v-if="version" class="statusbar__hint">v{{ version }}</span>
   </footer>
 </template>

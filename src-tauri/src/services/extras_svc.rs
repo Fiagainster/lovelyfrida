@@ -69,6 +69,12 @@ pub fn script_save(name: &str, content: &str) -> Result<String, String> {
     let dir = script_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let p = dir.join(format!("{name}.js"));
+    // 写路径过 guard（P1-1）：cases\ 不在工作区内，走「非检材」判定
+    crate::guard::guard_write_or_err(&p)?;
+    // 覆盖既有脚本前先快照（文档06 snapshots\）
+    if p.is_file() {
+        crate::guard::snapshot_file(&p)?;
+    }
     std::fs::write(&p, content).map_err(|e| e.to_string())?;
     crate::audit::audit("script_save", &p.display().to_string(), "done", "script-library", &format!("{} bytes", content.len()));
     Ok(p.display().to_string())
@@ -79,6 +85,12 @@ pub fn script_delete(name: &str) -> Result<(), String> {
         return Err("非法脚本名".into());
     }
     let p = script_dir().join(format!("{name}.js"));
+    if !p.is_file() {
+        return Err(format!("脚本不存在：{name}.js"));
+    }
+    crate::guard::guard_write_or_err(&p)?;
+    // 删除前快照（破坏性操作）
+    crate::guard::snapshot_file(&p)?;
     std::fs::remove_file(&p).map_err(|e| e.to_string())?;
     crate::audit::audit("script_delete", name, "done", "script-library", "");
     Ok(())

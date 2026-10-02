@@ -145,13 +145,20 @@ pub async fn frida_rpc(
         return Err("无活动脚本会话：先附加目标".into());
     };
     drop(s);
-    let v = state
+    // 审计（P1-4）：任意 agent RPC 是"揭示明文"级动作；入参截断存储，audit 内部再脱敏
+    let args_short: String = args.to_string().chars().take(200).collect();
+    let r = state
         .channel
         .call(
             "rpc_call",
             serde_json::json!({"script_id": script_id, "fn": f, "args": args}),
         )
-        .await?;
+        .await;
+    match &r {
+        Ok(_) => crate::audit::audit("frida_rpc", &f, "done", "agent-rpc", &args_short),
+        Err(e) => crate::audit::audit("frida_rpc", &f, "fail", "agent-rpc", &e),
+    }
+    let v = r?;
     v.get("result")
         .cloned()
         .ok_or_else(|| "rpc 无返回值".to_string())
@@ -196,10 +203,13 @@ pub async fn experiment_run(
     crate::services::experiment::run(&cfg, &state.channel, Some(&state), exp).await
 }
 
-/// 算法还原（文档04-F / U4）：两组样本防假命中
+/// 算法还原（文档04-F / U4）：两组样本防假命中。穷举是 CPU 密集，放阻塞线程池
 #[tauri::command]
 pub async fn crypto_reconstruct(samples: Vec<Sample>) -> Result<ReconstructResult, String> {
-    Ok(crypto_reconstruct_fn(&samples))
+    tauri::async_runtime::spawn_blocking(move || crypto_reconstruct_fn(&samples))
+        .await
+        .map_err(|e| format!("后台任务失败：{e}"))
+        .map(Ok)?
 }
 
 /// 爆破预估三件套（文档04-G）
@@ -208,7 +218,7 @@ pub async fn brute_estimate(scheme: crate::services::crypto::Scheme, mask: Strin
     Ok(brute_estimate_fn(&mask, &scheme))
 }
 
-/// 内置爆破（小空间；★自测不过不许跑 C-07）
+/// 内置爆破（小空间；★自测不过不许跑 C-07）。DFS 穷举 CPU 密集，放阻塞线程池
 #[tauri::command]
 pub async fn brute_run(
     recorder: tauri::State<'_, RecorderState>,
@@ -219,12 +229,18 @@ pub async fn brute_run(
     max_candidates: Option<u64>,
 ) -> Result<BruteResult, String> {
     let t0 = std::time::Instant::now();
-    let r = brute_run_fn(&scheme, &mask, &salt, &known, max_candidates.unwrap_or(5_000_000));
+    let mask_display = mask.clone();
+    let family_display = scheme.family.clone();
+    let r = tauri::async_runtime::spawn_blocking(move || {
+        brute_run_fn(&scheme, &mask, &salt, &known, max_candidates.unwrap_or(5_000_000))
+    })
+    .await
+    .map_err(|e| format!("后台任务失败：{e}"))?;
     crate::services::recorder::record_cmd(
         &recorder,
         "内置爆破",
-        &format!("brute（mask={mask}, family={}）", scheme.family),
-        serde_json::json!({ "mask": mask }),
+        &format!("brute（mask={mask_display}, family={family_display}）"),
+        serde_json::json!({ "mask": mask_display }),
         match &r.hit {
             Some(h) => format!("HIT pwd={h}"),
             None => format!("未命中（{}）", r.note),
@@ -249,12 +265,15 @@ pub async fn brute_generate_c(
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let ts = chrono::Local::now().format("%Y%m%d-%H%M%S");
     let path = dir.join(format!("brute-{ts}.c"));
+    // 写路径过 guard（P1-1）
+    crate::guard::guard_write_or_err(&path)?;
     std::fs::write(&path, c).map_err(|e| e.to_string())?;
     crate::audit::audit("brute_generate_c", &path.display().to_string(), "done", "restore-node", &scheme.family);
     Ok(serde_json::json!({ "path": path.display().to_string() }))
 }
 
 // ---------- M5：Evidence 台账 / 案卷包 ----------
+// SQLite 同步驱动（rusqlite）：统一 spawn_blocking，避免阻塞 tokio worker（P1-5）
 
 #[tauri::command]
 pub async fn ledger_add(
@@ -267,42 +286,80 @@ pub async fn ledger_add(
     source: String,
     screenshot_slot: String,
 ) -> Result<i64, String> {
-    ledger_svc::add_finding(&case_name, &question_id, &question, &answer, &confidence, &evidence, &source, &screenshot_slot)
+    tauri::async_runtime::spawn_blocking(move || {
+        ledger_svc::add_finding(&case_name, &question_id, &question, &answer, &confidence, &evidence, &source, &screenshot_slot)
+    })
+    .await
+    .map_err(|e| format!("后台任务失败：{e}"))?
 }
 
 #[tauri::command]
 pub async fn ledger_list(case_name: String) -> Result<Vec<Finding>, String> {
-    ledger_svc::list_findings(&case_name)
+    tauri::async_runtime::spawn_blocking(move || ledger_svc::list_findings(&case_name))
+        .await
+        .map_err(|e| format!("后台任务失败：{e}"))?
 }
 
 #[tauri::command]
 pub async fn ledger_delete(id: i64) -> Result<(), String> {
-    ledger_svc::delete_finding(id)
+    tauri::async_runtime::spawn_blocking(move || ledger_svc::delete_finding(id))
+        .await
+        .map_err(|e| format!("后台任务失败：{e}"))?
 }
 
 #[tauri::command]
 pub async fn ledger_export_md(case_name: String) -> Result<String, String> {
-    ledger_svc::export_markdown(&case_name)
+    tauri::async_runtime::spawn_blocking(move || ledger_svc::export_markdown(&case_name))
+        .await
+        .map_err(|e| format!("后台任务失败：{e}"))?
 }
 
 #[tauri::command]
 pub async fn ledger_export_bundle(case_name: String) -> Result<String, String> {
-    ledger_svc::export_bundle(&case_name)
+    tauri::async_runtime::spawn_blocking(move || ledger_svc::export_bundle(&case_name))
+        .await
+        .map_err(|e| format!("后台任务失败：{e}"))?
 }
 
 // ---------- 能力包 B/D：脚本库 + AppProfile ----------
 
 #[tauri::command]
-pub async fn script_list() -> Result<Vec<ex::ScriptInfo>, String> { ex::script_list() }
+pub async fn script_list() -> Result<Vec<ex::ScriptInfo>, String> {
+    tauri::async_runtime::spawn_blocking(ex::script_list)
+        .await
+        .map_err(|e| format!("后台任务失败：{e}"))?
+}
 
 #[tauri::command]
-pub async fn script_read(name: String) -> Result<String, String> { ex::script_read(&name) }
+pub async fn script_read(name: String) -> Result<String, String> {
+    let audited_name = name.clone();
+    let r = tauri::async_runtime::spawn_blocking(move || ex::script_read(&name))
+        .await
+        .map_err(|e| format!("后台任务失败：{e}"))?;
+    // 审计（P1-4）：脚本读取留痕（内容本身不入账）
+    crate::audit::audit(
+        "script_read",
+        &audited_name,
+        if r.is_ok() { "done" } else { "fail" },
+        "script-library",
+        "",
+    );
+    r
+}
 
 #[tauri::command]
-pub async fn script_save(name: String, content: String) -> Result<String, String> { ex::script_save(&name, &content) }
+pub async fn script_save(name: String, content: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || ex::script_save(&name, &content))
+        .await
+        .map_err(|e| format!("后台任务失败：{e}"))?
+}
 
 #[tauri::command]
-pub async fn script_delete(name: String) -> Result<(), String> { ex::script_delete(&name) }
+pub async fn script_delete(name: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || ex::script_delete(&name))
+        .await
+        .map_err(|e| format!("后台任务失败：{e}"))?
+}
 
 #[tauri::command]
 #[allow(non_snake_case)]
@@ -311,33 +368,47 @@ pub async fn profile_save(
     apkPath: String, dataDirs: String, secretFiles: String, secretTransform: String,
     entryGesture: String, entryCoords: String, probeTargets: String, notes: String,
 ) -> Result<i64, String> {
-    ex::profile_save(&caseName, id, &package, uid, &apkPath, &dataDirs, &secretFiles,
-        &secretTransform, &entryGesture, &entryCoords, &probeTargets, &notes)
+    tauri::async_runtime::spawn_blocking(move || {
+        ex::profile_save(&caseName, id, &package, uid, &apkPath, &dataDirs, &secretFiles,
+            &secretTransform, &entryGesture, &entryCoords, &probeTargets, &notes)
+    })
+    .await
+    .map_err(|e| format!("后台任务失败：{e}"))?
 }
 
 #[tauri::command]
 #[allow(non_snake_case)]
 pub async fn profile_list(caseName: String) -> Result<Vec<ex::AppProfile>, String> {
-    ex::profile_list(&caseName)
+    tauri::async_runtime::spawn_blocking(move || ex::profile_list(&caseName))
+        .await
+        .map_err(|e| format!("后台任务失败：{e}"))?
 }
 
 #[tauri::command]
-pub async fn profile_delete(id: i64) -> Result<(), String> { ex::profile_delete(id) }
+pub async fn profile_delete(id: i64) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || ex::profile_delete(id))
+        .await
+        .map_err(|e| format!("后台任务失败：{e}"))?
+}
 
 #[tauri::command]
 pub async fn dumps_list() -> Result<Vec<serde_json::Value>, String> {
-    let cfg = crate::config::get();
-    let dir = crate::paths::cases_root(&cfg).join("dumps");
-    let mut out = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&dir) {
-        for e in entries.flatten() {
-            if let Ok(meta) = e.metadata() {
-                out.push(serde_json::json!({
-                    "name": e.file_name().to_string_lossy(),
-                    "size": meta.len(),
-                }));
+    tauri::async_runtime::spawn_blocking(|| {
+        let cfg = crate::config::get();
+        let dir = crate::paths::cases_root(&cfg).join("dumps");
+        let mut out = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for e in entries.flatten() {
+                if let Ok(meta) = e.metadata() {
+                    out.push(serde_json::json!({
+                        "name": e.file_name().to_string_lossy(),
+                        "size": meta.len(),
+                    }));
+                }
             }
         }
-    }
-    Ok(out)
+        Ok(out)
+    })
+    .await
+    .map_err(|e| format!("后台任务失败：{e}"))?
 }

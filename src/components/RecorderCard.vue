@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { onMounted, onUnmounted, ref } from "vue";
 import { NButton, useMessage } from "naive-ui";
 import { DownloadOutline, TrashOutline, RefreshOutline } from "@vicons/ionicons5";
 import { api, type RecordedStep } from "@/api";
@@ -34,10 +34,16 @@ async function doClear() {
   await refresh();
 }
 
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+
 onMounted(() => {
   refresh();
   // 安装/附加等长操作完成时会写入记录，轮询保持卡片新鲜
-  setInterval(refresh, 5000);
+  pollTimer = setInterval(refresh, 5000);
+});
+
+onUnmounted(() => {
+  if (pollTimer !== null) clearInterval(pollTimer);
 });
 defineExpose({ refresh });
 </script>

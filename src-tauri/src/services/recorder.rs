@@ -68,65 +68,75 @@ pub struct ExportResult {
     pub count: usize,
 }
 
-/// 导出（文档03：按当前 OS 出方言 + md 带截图位）
-pub fn export(state: &RecorderState, format: &str) -> Result<ExportResult, String> {
-    let steps = state.steps.try_lock().map_err(|_| "记录忙")?;
-    if steps.is_empty() {
-        return Err("暂无操作记录".into());
-    }
-    let ts = chrono::Local::now().format("%Y%m%d-%H%M%S");
-    let ext = match format {
-        "ps1" | "sh" | "md" | "json" => format,
-        other => return Err(format!("未知导出格式：{other}")),
-    };
-    let cfg = crate::config::get();
-    let dir = crate::paths::cases_root(&cfg).join("exports");
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let path = dir.join(format!("recording-{ts}.{ext}"));
+/// 导出（文档03：按当前 OS 出方言 + md 带截图位）。
+/// 内容组装持锁内存完成，写盘走 spawn_blocking（P1-5）。
+pub async fn export(state: &RecorderState, format: &str) -> Result<ExportResult, String> {
+    let (path, content, count) = {
+        let steps = state.steps.try_lock().map_err(|_| "记录忙")?;
+        if steps.is_empty() {
+            return Err("暂无操作记录".into());
+        }
+        let ts = chrono::Local::now().format("%Y%m%d-%H%M%S");
+        let ext = match format {
+            "ps1" | "sh" | "md" | "json" => format,
+            other => return Err(format!("未知导出格式：{other}")),
+        };
+        let cfg = crate::config::get();
+        let dir = crate::paths::cases_root(&cfg).join("exports");
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let path = dir.join(format!("recording-{ts}.{ext}"));
 
-    let mut content = String::new();
-    match format {
-        "json" => {
-            content = serde_json::to_string_pretty(&*steps).map_err(|e| e.to_string())?;
-        }
-        "sh" => {
-            content.push_str("#!/bin/sh\n# LovelyFrida 操作记录（可重放）\nset -e\n");
-            for s in steps.iter() {
-                content.push_str(&format!("# step{} [{}] {}\n", s.seq, s.ts, s.action));
-                content.push_str(&s.command);
-                content.push('\n');
+        let mut content = String::new();
+        match format {
+            "json" => {
+                content = serde_json::to_string_pretty(&*steps).map_err(|e| e.to_string())?;
             }
-        }
-        "ps1" => {
-            content.push_str("# LovelyFrida 操作记录（可重放）\r\n");
-            for s in steps.iter() {
-                content.push_str(&format!("# step{} [{}] {}\r\n", s.seq, s.ts, s.action));
-                content.push_str(&s.command.replace('\n', " && "));
-                content.push_str("\r\n");
+            "sh" => {
+                content.push_str("#!/bin/sh\n# LovelyFrida 操作记录（可重放）\nset -e\n");
+                for s in steps.iter() {
+                    content.push_str(&format!("# step{} [{}] {}\n", s.seq, s.ts, s.action));
+                    content.push_str(&s.command);
+                    content.push('\n');
+                }
             }
-        }
-        "md" => {
-            content.push_str("# LovelyFrida 操作记录\n\n> 由 Recorder v1 自动生成，可直接粘入笔记。\n\n");
-            for (i, s) in steps.iter().enumerate() {
-                content.push_str(&format!(
-                    "## {}. {}\n\n- 时间：`{}`\n- 耗时：{}ms\n- 结果：{}\n\n```sh\n{}\n```\n\n【截图位 {}-1】\n\n",
-                    i + 1,
-                    s.action,
-                    s.ts,
-                    s.duration_ms,
-                    s.result,
-                    s.command,
-                    i + 1
-                ));
+            "ps1" => {
+                content.push_str("# LovelyFrida 操作记录（可重放）\r\n");
+                for s in steps.iter() {
+                    content.push_str(&format!("# step{} [{}] {}\r\n", s.seq, s.ts, s.action));
+                    content.push_str(&s.command.replace('\n', " && "));
+                    content.push_str("\r\n");
+                }
             }
+            "md" => {
+                content.push_str("# LovelyFrida 操作记录\n\n> 由 Recorder v1 自动生成，可直接粘入笔记。\n\n");
+                for (i, s) in steps.iter().enumerate() {
+                    content.push_str(&format!(
+                        "## {}. {}\n\n- 时间：`{}`\n- 耗时：{}ms\n- 结果：{}\n\n```sh\n{}\n```\n\n【截图位 {}-1】\n\n",
+                        i + 1,
+                        s.action,
+                        s.ts,
+                        s.duration_ms,
+                        s.result,
+                        s.command,
+                        i + 1
+                    ));
+                }
+            }
+            other => return Err(format!("未知导出格式：{other}")),
         }
-        other => return Err(format!("未知导出格式：{other}")),
-    }
-    std::fs::write(&path, content).map_err(|e| e.to_string())?;
+        (path, content, steps.len())
+    };
+    // 写路径过 guard（P1-1）：导出目标不得落在检材只读根
+    crate::guard::guard_write_or_err(&path)?;
+    let p = path.clone();
+    tauri::async_runtime::spawn_blocking(move || std::fs::write(&p, &content))
+        .await
+        .map_err(|e| format!("后台任务失败：{e}"))?
+        .map_err(|e| e.to_string())?;
     crate::audit::audit("recorder_export", &path.display().to_string(), "done", "recorder", format);
     Ok(ExportResult {
         path: path.display().to_string(),
-        count: steps.len(),
+        count,
     })
 }
 

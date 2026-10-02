@@ -72,7 +72,7 @@ async function apiWrite(id: number, d: string) {
 async function onCreate() {
   creating.value = true;
   try {
-    await store.create(serialInput.value.trim() || "127.0.0.1:15555");
+    await store.create(serialInput.value.trim() || "127.0.0.1:16384");
     await nextTick();
     if (store.activeId != null) mountTerm(store.activeId);
   } catch (e) {

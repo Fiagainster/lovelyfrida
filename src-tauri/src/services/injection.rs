@@ -298,7 +298,13 @@ pub async fn run(
     let mut md5_evidence: Vec<String> = Vec::new();
     let mut md5_ok = true;
     for (target, local) in &pushed {
-        let local_bytes = std::fs::read(local).unwrap_or_default();
+        // 大文件整读是重 IO，放阻塞线程池（P1-5）
+        let local_path = local.clone();
+        let local_bytes = tauri::async_runtime::spawn_blocking(move || {
+            std::fs::read(&local_path).unwrap_or_default()
+        })
+        .await
+        .unwrap_or_default();
         let local_md5 = md5_hex(&local_bytes);
         let remote = shell(
             &adb,

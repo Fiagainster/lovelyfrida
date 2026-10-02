@@ -54,15 +54,11 @@ export function scanMemory(
   for (const r of ranges) {
     if (matches.length >= limit) break;
     try {
-      Memory.scan(r.base, r.size, pattern, {
-        onMatch(address, size) {
-          matches.push({ address: address.toString(), size });
-          return matches.length >= limit ? "stop" : undefined;
-        },
-        onComplete() {
-          /* done */
-        },
-      });
+      // 必须用 scanSync：异步 scan 的回调在本函数返回后才执行，同步收集恒为空
+      for (const m of Memory.scanSync(r.base, r.size, pattern)) {
+        matches.push({ address: m.address.toString(), size: m.size });
+        if (matches.length >= limit) break;
+      }
     } catch {
       /* 不可读区域跳过 */
     }

@@ -264,7 +264,6 @@ export const api = {
   ledgerExportBundle: (caseName: string) => invoke<string>("ledger_export_bundle", { caseName }),
 
   // 能力包 A/B/D
-  fridaRpcRaw: (f: string, args: unknown[]) => invoke<unknown>("frida_rpc", { f, args }),
   scriptList: () => invoke<ScriptInfo[]>("script_list"),
   scriptRead: (name: string) => invoke<string>("script_read", { name }),
   scriptSave: (name: string, content: string) => invoke<string>("script_save", { name, content }),

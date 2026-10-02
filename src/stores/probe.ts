@@ -116,6 +116,15 @@ export const useProbeStore = defineStore("probe", () => {
     void listen<TraceRecord>("trace-event", (e) => {
       pushTrace(e.payload);
     });
+    // dumpDex 落盘事件（此前后端有发前端无收）：作为一条 trace 进入时间轴
+    void listen<{ path: string; size: number; base: string }>("dex-dumped", (e) => {
+      pushTrace({
+        seq: Date.now(),
+        wall: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
+        run_id: "dex-dump",
+        payload: { t: "dex_dumped", ...e.payload },
+      });
+    });
   }
 
   return {

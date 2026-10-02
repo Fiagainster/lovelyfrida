@@ -83,24 +83,32 @@ pub fn on_agent_message(
     data_b64: &Option<String>,
 ) {
     let t = payload.get("t").and_then(|v| v.as_str()).unwrap_or("");
-    // dex_dump：内存 dex 落盘（脱壳辅助）
+    // dex_dump：内存 dex 落盘（脱壳辅助）。base64 解码 + MB 级写盘是重 IO，放阻塞线程池
     if t == "dex_dump" && data_b64.is_some() {
         use base64::Engine;
-        let base = payload.get("base").and_then(|v| v.as_str()).unwrap_or("unknown");
-        let dir = {
-            let c = crate::config::get();
-            crate::paths::cases_root(&c).join("dumps")
-        };
-        let _ = std::fs::create_dir_all(&dir);
-        let fname = format!("dex-{}.dex", base.replace("0x", ""));
-        let path = dir.join(&fname);
-        if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(data_b64.as_ref().unwrap()) {
-            if std::fs::write(&path, &bytes).is_ok() {
-                tracing::info!("[dex] 落盘 {} ({} bytes)", path.display(), bytes.len());
-                let _ = app.emit("dex-dumped", serde_json::json!({"path": path.display().to_string(), "size": bytes.len(), "base": base}));
-                crate::audit::audit("dex_dump", &path.display().to_string(), "done", "probe-lab", &format!("{} bytes", bytes.len()));
+        let app = app.clone();
+        let data = data_b64.as_ref().unwrap().clone();
+        let base = payload
+            .get("base")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        tauri::async_runtime::spawn_blocking(move || {
+            let dir = {
+                let c = crate::config::get();
+                crate::paths::cases_root(&c).join("dumps")
+            };
+            let _ = std::fs::create_dir_all(&dir);
+            let fname = format!("dex-{}.dex", base.replace("0x", ""));
+            let path = dir.join(&fname);
+            if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&data) {
+                if std::fs::write(&path, &bytes).is_ok() {
+                    tracing::info!("[dex] 落盘 {} ({} bytes)", path.display(), bytes.len());
+                    let _ = app.emit("dex-dumped", serde_json::json!({"path": path.display().to_string(), "size": bytes.len(), "base": base}));
+                    crate::audit::audit("dex_dump", &path.display().to_string(), "done", "probe-lab", &format!("{} bytes", bytes.len()));
+                }
             }
-        }
+        });
         return;
     }
     // dlopen / register_natives / ssl_data 进时间轴（结构化观测）

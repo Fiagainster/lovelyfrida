@@ -256,7 +256,10 @@ pub async fn run(
         "errors": errors,
     });
     let path = dir.join(format!("exp-{experiment_id}.json"));
-    if let Ok(s) = serde_json::to_string_pretty(&record) {
+    // 写路径过 guard（P1-1）
+    if let Err(e) = crate::guard::guard_write_or_err(&path) {
+        tracing::warn!("[experiment] 实验记录落盘被拒绝：{e}");
+    } else if let Ok(s) = serde_json::to_string_pretty(&record) {
         let _ = std::fs::write(path, s);
     }
     crate::audit::audit(

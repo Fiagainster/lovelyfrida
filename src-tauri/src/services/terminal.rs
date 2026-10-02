@@ -25,6 +25,8 @@ pub struct TerminalSession {
     writer: std::sync::Mutex<Box<dyn Write + Send>>,
     master: Box<dyn MasterPty + Send>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
+    /// 已敲未提交的输入行：回车提交时整行入审计（逐键审计会刷屏）
+    line_buf: std::sync::Mutex<String>,
 }
 
 #[derive(Default)]
@@ -101,6 +103,7 @@ pub async fn create(
             writer,
             master: pair.master,
             child,
+            line_buf: std::sync::Mutex::new(String::new()),
         },
     );
     crate::audit::audit("terminal_create", serial, "done", "terminal-drawer", &format!("term#{id}"));
@@ -110,10 +113,42 @@ pub async fn create(
 pub async fn write(mgr: &TerminalMgr, id: u32, data: &str) -> Result<(), String> {
     let s = mgr.sessions.lock().await;
     let t = s.get(&id).ok_or("终端会话不存在")?;
-    let mut w = t.writer.lock().map_err(|_| "writer 忙")?;
-    w.write_all(data.as_bytes())
-        .map_err(|e| format!("写入失败：{e}"))?;
-    w.flush().map_err(|e| format!("flush 失败：{e}"))
+    {
+        let mut w = t.writer.lock().map_err(|_| "writer 忙")?;
+        w.write_all(data.as_bytes())
+            .map_err(|e| format!("写入失败：{e}"))?;
+        w.flush().map_err(|e| format!("flush 失败：{e}"))?;
+    }
+    // 审计（文档08 可审计：终端手敲的命令必须留痕）：按行聚合，回车提交才入账；
+    // audit() 内部自带脱敏（P1-3），敏感值不会明文进 audit.log
+    let mut buf = t.line_buf.lock().map_err(|_| "忙")?;
+    buf.push_str(data);
+    while let Some(pos) = buf.find(['\r', '\n']) {
+        let line: String = buf.drain(..=pos).collect();
+        let line = line.trim();
+        if !line.is_empty() {
+            let shown: String = line.chars().take(200).collect();
+            crate::audit::audit(
+                "terminal_write",
+                &t.serial,
+                "done",
+                "terminal-drawer",
+                &format!("term#{id}: {shown}"),
+            );
+        }
+    }
+    // 防失控：无换行的超长输入（大段粘贴/编辑器行为）直接落账并清空
+    if buf.chars().count() > 2000 {
+        crate::audit::audit(
+            "terminal_write",
+            &t.serial,
+            "done",
+            "terminal-drawer",
+            &format!("term#{id}: (超长输入 {} 字节)", buf.len()),
+        );
+        buf.clear();
+    }
+    Ok(())
 }
 
 pub async fn resize(mgr: &TerminalMgr, id: u32, cols: u16, rows: u16) -> Result<(), String> {

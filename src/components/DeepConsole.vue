@@ -212,7 +212,6 @@ onMounted(refreshScripts);
         class="mono"
         placeholder="// 粘贴任意 frida 脚本：Java.perform / Interceptor.attach / rpc.exports 均可"
       />
-      />
       <div class="connect-row" style="margin-top: 8px">
         <NButton class="btn-hero" size="small" :loading="scriptRunning" @click="onRunScript">
           <template #icon><PlayOutline /></template>

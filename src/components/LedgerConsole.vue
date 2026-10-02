@@ -3,11 +3,17 @@ import { computed, onMounted, reactive, ref } from "vue";
 import { NButton, NInput, NSelect, NTag, useMessage } from "naive-ui";
 import { AddOutline, ArchiveOutline, DownloadOutline, TrashOutline } from "@vicons/ionicons5";
 import { api, type Finding } from "@/api";
+import { useCaseStore } from "@/stores/case";
 import StatusLight from "@/components/StatusLight.vue";
 
 /** 档案台账（文档04-H / M5）：发现登记 + 置信度约束（high=双证据）+ 导出 + 案卷包 */
 const message = useMessage();
-const caseName = ref("默认案件");
+const caseStore = useCaseStore();
+// 案件名走全局单一真源（档案/台账必须同 case）；输入框可直接改名，写回 store
+const caseName = computed({
+  get: () => caseStore.caseName,
+  set: (v: string) => caseStore.setCaseName(v),
+});
 const findings = ref<Finding[]>([]);
 const loading = ref(false);
 
@@ -36,7 +42,7 @@ const highBlockHint = computed(
 async function refresh() {
   loading.value = true;
   try {
-    findings.value = await api.ledgerList(caseName.value.trim() || "default");
+    findings.value = await api.ledgerList(caseStore.apiCaseName());
   } catch (e) {
     message.error(String(e));
   } finally {
@@ -50,7 +56,7 @@ async function onAdd() {
   if (form.evDevice) evidence.push({ kind: "device", note: form.evNote || "真机复现" });
   try {
     await api.ledgerAdd({
-      caseName: caseName.value.trim() || "default",
+      caseName: caseStore.apiCaseName(),
       questionId: form.questionId.trim() || `Q${findings.value.length + 1}`,
       question: form.question.trim(),
       answer: form.answer.trim(),
@@ -79,7 +85,7 @@ async function onDelete(id: number) {
 
 async function exportMd() {
   try {
-    const p = await api.ledgerExportMd(caseName.value.trim() || "default");
+    const p = await api.ledgerExportMd(caseStore.apiCaseName());
     message.success(`已导出 → ${p}`);
   } catch (e) {
     message.error(String(e));
@@ -88,7 +94,7 @@ async function exportMd() {
 
 async function exportBundle() {
   try {
-    const p = await api.ledgerExportBundle(caseName.value.trim() || "default");
+    const p = await api.ledgerExportBundle(caseStore.apiCaseName());
     message.success(`案卷包已生成 → ${p}`);
   } catch (e) {
     message.error(String(e));
