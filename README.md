@@ -27,7 +27,7 @@
 | 应用外壳 | Tauri 2.x（单 exe 分发、Rust 后端进程控制） |
 | 前端 | Vue 3 + Vite + TypeScript + Pinia + Naive UI，编辑器 Monaco、终端 xterm.js、图表 ECharts |
 | 后端 | Rust（tokio 多线程），rusqlite(bundled)、tracing、portable-pty（M1） |
-| Frida 对接 | **三通道同一 trait**：A=Rust frida crate（远期）/ **B=Python sidecar JSON-RPC（主通道，已实现）** / C=CLI 兜底；结构化数据一律 agent `send()` JSON 回传，宿主不解析控制台文本 |
+| Frida 对接 | **三通道**：A=Rust frida crate（远期）/ **B=sidecar JSON-RPC over stdio（主通道；打包态为内置 frida_bridge.exe，开发态回退 python）** / C=frida CLI 兜底（观测级降级，RPC 类操作明确报错）；auto 先 B、B 不可用降级 C，当前通道 UI 必须明示；结构化数据一律 agent `send()` JSON 回传，宿主不解析控制台文本 |
 | Agent | 注入进程的常驻 JS（M1 握手；M2 按已批准的 [09 扩展方案](docs/09-通用调试工作台扩展.md) 升级为通用调试底座 + instruments） |
 
 ```
@@ -42,15 +42,15 @@
 ## 三、目录结构
 
 ```
-docs/            需求与设计文档（01~09，见下方文档地图）
-src/             Vue 3 前端（views 六视图、components、stores、api）
+docs/            需求与设计文档（01~10，见下方文档地图）
+src/             Vue 3 前端（views 六视图、components、stores、api、diagnostics 规则引擎）
 src-tauri/       Rust 后端
-  src/services/  应用服务层（doctor / session / first_run）
-  src/backends/  能力层（adb / frida sidecar）
+  src/services/  应用服务层（doctor / session / first_run / store / ledger …）
+  src/backends/  能力层（adb / frida 通道B sidecar / frida_c 通道C）
   src/commands/  Tauri commands（按域分组）
-agent/           注入 agent（M1 core.js 握手 → M2 通用底座）
-sidecar/         通道B：frida_bridge.py（JSON-RPC over stdio）
-scripts/         dev.mjs（自动选端口启动）、gen_icon.py
+agent/           注入 agent（src/ TypeScript 源码 → esbuild 产 dist/core.js，构建期内嵌 Rust）
+sidecar/         通道B：frida_bridge.py（JSON-RPC over stdio）；dist/ 为打包产物（不入库）
+scripts/         dev.mjs（自动选端口启动）、build_sidecar.py（PyInstaller 打包）、gen_icon.py
 bin/             随包二进制（不入库，见下方「二进制供给」）+ binary_manifest.json（入库）
 workspace/       运行时唯一可写区（不入库）
 cases/ logs/     归档与审计日志（不入库）
@@ -107,6 +107,7 @@ frida-server 从 [github.com/frida/frida/releases](https://github.com/frida/frid
 | 07 | [安全合规与工程纪律](docs/07-安全合规与工程纪律.md) | 只读、脱敏、审计、法律边界、供应链 |
 | 08 | [路线图与验收标准](docs/08-路线图与验收标准.md) | M0~M5 + 10 个真实任务验收用例 + 风险与待决策项 |
 | 09 | [通用调试工作台扩展](docs/09-通用调试工作台扩展.md) | **已批准**：M2 扩容——core agent 通用底座 + 探索器/REPL/脚本库 + 边界决策（不接 AI） |
+| 10 | [完善计划](docs/10-完善计划.md) | M5 后全面体检：四阶段施工记录（P0 真 bug/安全兑现 → 诊断引擎/爆破/落库 → 通道C/视图 → 单安装包分发）+ 后续优化方向 |
 里程碑进度（详见 [08 路线图](docs/08-路线图与验收标准.md)）：**M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → M5 核心 ✅**。每阶段均经真机（MuMu x86_64）或单测验收，验收脚本见 scripts/。
 
 ## 七、非目标（明确不做）
