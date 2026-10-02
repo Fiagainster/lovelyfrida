@@ -9,6 +9,8 @@ import {
   type CryptoReconstructResult,
   type CryptoSample,
 } from "@/api";
+import { useCaseStore } from "@/stores/case";
+import { useDiagStore } from "@/stores/diagnostics";
 import StatusLight from "@/components/StatusLight.vue";
 
 /** 还原节点（M4）：算法还原（穷举+双样本防假命中）+ 爆破编排（预估/内置/C 骨架/hashcat） */
@@ -31,7 +33,7 @@ async function onReconstruct() {
   recRunning.value = true;
   recResult.value = null;
   try {
-    recResult.value = await api.cryptoReconstruct(valid);
+    recResult.value = await api.cryptoReconstruct(valid, useCaseStore().apiCaseName());
     if (recResult.value.error) {
       message.error(recResult.value.error);
     } else {
@@ -65,6 +67,8 @@ async function onEstimate() {
   estLoading.value = true;
   try {
     est.value = await api.bruteEstimate(schemeForBrute.value, brute.mask.trim());
+    // C-06 提示：引擎选了生成 C 骨架 → 诊断流出提示卡
+    useDiagStore().reportBrute(false, est.value.engine === "generate_c");
   } catch (e) {
     message.error(String(e));
   } finally {
@@ -85,7 +89,9 @@ async function onRunBrute() {
       salt: brute.salt.trim(),
       target: samples[0].target.trim(),
     };
-    bruteResult.value = await api.bruteRun(schemeForBrute.value, brute.mask.trim(), brute.salt.trim(), known, brute.maxCandidates);
+    bruteResult.value = await api.bruteRun(schemeForBrute.value, brute.mask.trim(), brute.salt.trim(), known, brute.maxCandidates, useCaseStore().apiCaseName());
+    // C-07 硬门槛触发器：自测失败 → 诊断流阻断卡
+    useDiagStore().reportBrute(!bruteResult.value.self_test_passed, false);
     if (bruteResult.value.hit) message.success(`HIT pwd=${bruteResult.value.hit}`);
     else if (!bruteResult.value.self_test_passed) message.error(bruteResult.value.note);
     else message.warning(`未命中（${bruteResult.value.tried} 候选）`);
@@ -97,15 +103,20 @@ async function onRunBrute() {
 }
 
 async function onGenC() {
-  if (!schemeForBrute.value || !samples[0].plaintext.trim()) return;
+  if (!schemeForBrute.value || !samples[0].plaintext.trim() || !brute.mask.trim()) return;
   try {
-    const r = await api.bruteGenerateC(schemeForBrute.value, {
-      plaintext: samples[0].plaintext.trim(),
-      salt: brute.salt.trim(),
-      target: samples[0].target.trim(),
-    });
+    const r = await api.bruteGenerateC(
+      schemeForBrute.value,
+      {
+        plaintext: samples[0].plaintext.trim(),
+        salt: brute.salt.trim(),
+        target: samples[0].target.trim(),
+      },
+      brute.mask.trim(),
+      useCaseStore().apiCaseName(),
+    );
     cPath.value = r.path;
-    message.success(`C 骨架已生成 → ${r.path}`);
+    message.success(`C 骨架已生成（掩码循环 + 自测桩 + OpenMP）→ ${r.path}`);
   } catch (e) {
     message.error(String(e));
   }

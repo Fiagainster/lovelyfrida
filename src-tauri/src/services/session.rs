@@ -37,6 +37,9 @@ pub struct SessionSnapshot {
     pub hello: Option<Value>,
     pub channel: String,
     pub updated_at: String,
+    /// cases.db sessions 行 id（P2-3 落库；None=落库失败或库不可用，不阻断分析）
+    #[serde(default)]
+    pub db_session_id: Option<i64>,
 }
 
 impl Default for SessionSnapshot {
@@ -52,6 +55,7 @@ impl Default for SessionSnapshot {
             hello: None,
             channel: "B".into(),
             updated_at: chrono::Local::now().format("%H:%M:%S%.3f").to_string(),
+            db_session_id: None,
         }
     }
 }
@@ -376,6 +380,7 @@ pub async fn attach(
     state: &FridaState,
     cfg: &AppConfig,
     target: Value,
+    case_name: Option<String>,
 ) -> Result<SessionSnapshot, String> {
     {
         let mut s = state.session.lock().await;
@@ -480,11 +485,32 @@ pub async fn attach(
                                     payload.as_ref().and_then(|p| p.get("java")).and_then(|v| v.as_str()),
                                 ));
                                 s.updated_at = chrono::Local::now().format("%H:%M:%S%.3f").to_string();
+                                // 落库（P2-3）：case→device→target→session；失败不阻断分析
+                                let db_case = case_name
+                                    .clone()
+                                    .unwrap_or_else(|| "默认案件".into());
+                                let serial_db = s.device.clone();
+                                let tgt_display = target_display(&target);
+                                let db_result = tauri::async_runtime::spawn_blocking(move || {
+                                    crate::store::session_start(&db_case, serial_db.as_deref(), &tgt_display, "b", "attach 成功（hello 握手通过）")
+                                })
+                                .await;
+                                match db_result {
+                                    Ok(Ok(id)) => s.db_session_id = Some(id),
+                                    Ok(Err(e)) => {
+                                        s.evidence.push(format!("会话落库跳过：{e}"));
+                                        tracing::warn!("[session] 会话落库失败（不阻断）：{e}");
+                                    }
+                                    Err(e) => {
+                                        s.evidence.push(format!("会话落库跳过：{e}"));
+                                        tracing::warn!("[session] 会话落库任务失败（不阻断）：{e}");
+                                    }
+                                }
                                 s.evidence.push("trace run 已开启".into());
                                 let snap = s.clone();
                                 let _ = app.emit("session-state", snap.clone());
                                 let trace: State<std::sync::Arc<crate::services::trace::TraceState>> = app.state();
-                                trace.start(&snap.target.clone().unwrap_or_default());
+                                trace.start(&snap.target.clone().unwrap_or_default(), snap.db_session_id).await;
                                 crate::audit::audit(
                                     "session_attach",
                                     snap.target.as_deref().unwrap_or(""),
@@ -556,8 +582,16 @@ pub async fn detach(app: &tauri::AppHandle, state: &FridaState) -> Result<Sessio
     s.evidence.push("已分离（脚本卸载 + 会话 detach）".into());
     {
         let trace: State<std::sync::Arc<crate::services::trace::TraceState>> = app.state();
-        if let Some(rid) = trace.stop() {
+        if let Some(rid) = trace.stop().await {
             s.evidence.push(format!("trace run {rid} 已落盘"));
+        }
+    }
+    // 落库收尾（P2-3）
+    if let Some(db_id) = s.db_session_id.take() {
+        if let Err(e) =
+            tauri::async_runtime::spawn_blocking(move || crate::store::session_finish(db_id, "stopped", "用户主动分离")).await
+        {
+            tracing::warn!("[session] 会话落库收尾失败（不阻断）：{e}");
         }
     }
     if !errors.is_empty() {

@@ -83,7 +83,10 @@ export const useSessionStore = defineStore("session", () => {
   async function attach(target: number | string) {
     attachLoading.value = true;
     try {
-      session.value = await api.fridaSessionAttach(target);
+      // 案件名随附加链路落库（P2-3）：会话归入当前案件
+      const { useCaseStore } = await import("@/stores/case");
+      const caseStore = useCaseStore();
+      session.value = await api.fridaSessionAttach(target, caseStore.apiCaseName());
       if (session.value.phase === "running") {
         void api.fridaSessionPing();
       }
@@ -127,9 +130,12 @@ export const useSessionStore = defineStore("session", () => {
         pushMessage("detached", p.reason ?? "detached");
         void refreshSession();
       }
+      // S 组谓词依赖会话证据/消息流（detached、端口切换等信号）
+      void import("@/stores/diagnostics").then(({ useDiagStore }) => useDiagStore().scheduleReevaluate());
     });
     await listen<SessionSnapshot>("session-state", (e) => {
       session.value = e.payload;
+      void import("@/stores/diagnostics").then(({ useDiagStore }) => useDiagStore().scheduleReevaluate());
     });
   }
 

@@ -66,17 +66,19 @@ pub async fn frida_processes(
     enumerate_processes(&cfg, &state.channel).await
 }
 
-/// 附加到目标（pid 或进程名），走完整链路并等待 hello
+/// 附加到目标（pid 或进程名），走完整链路并等待 hello；caseName 用于会话落库（P2-3）
 #[tauri::command]
+#[allow(non_snake_case)]
 pub async fn frida_session_attach(
     app: tauri::AppHandle,
     state: tauri::State<'_, FridaState>,
     recorder: tauri::State<'_, RecorderState>,
     target: serde_json::Value,
+    caseName: Option<String>,
 ) -> Result<SessionSnapshot, String> {
     let cfg = crate::config::get();
     let t0 = std::time::Instant::now();
-    let result = attach(&app, &state, &cfg, target.clone()).await;
+    let result = attach(&app, &state, &cfg, target.clone(), caseName).await;
     let tgt = if target.is_u64() || target.is_i64() {
         format!("pid:{}", target.as_i64().unwrap_or(0))
     } else {
@@ -193,23 +195,50 @@ pub async fn injection_run(
     result
 }
 
-/// 受控实验（文档04-E / U3）
+/// 受控实验（文档04-E / U3）；caseName 用于实验落库（P2-3）
 #[tauri::command]
+#[allow(non_snake_case)]
 pub async fn experiment_run(
     state: tauri::State<'_, crate::services::session::FridaState>,
     exp: ExperimentConfig,
+    caseName: Option<String>,
 ) -> Result<ExperimentReport, String> {
     let cfg = crate::config::get();
-    crate::services::experiment::run(&cfg, &state.channel, Some(&state), exp).await
+    crate::services::experiment::run(&cfg, &state.channel, Some(&state), exp, caseName).await
 }
 
-/// 算法还原（文档04-F / U4）：两组样本防假命中。穷举是 CPU 密集，放阻塞线程池
+/// 算法还原（文档04-F / U4）：两组样本防假命中。穷举是 CPU 密集，放阻塞线程池；
+/// 还原出的方案落 crypto_schemes 表（P2-3）。
 #[tauri::command]
-pub async fn crypto_reconstruct(samples: Vec<Sample>) -> Result<ReconstructResult, String> {
-    tauri::async_runtime::spawn_blocking(move || crypto_reconstruct_fn(&samples))
-        .await
-        .map_err(|e| format!("后台任务失败：{e}"))
-        .map(Ok)?
+#[allow(non_snake_case)]
+pub async fn crypto_reconstruct(
+    samples: Vec<Sample>,
+    caseName: Option<String>,
+) -> Result<ReconstructResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let r = crypto_reconstruct_fn(&samples);
+        if let Some(scheme) = &r.scheme {
+            let refs = serde_json::json!(
+                samples.iter().map(|s| s.target.clone()).collect::<Vec<_>>()
+            )
+            .to_string();
+            crate::store::crypto_scheme_record(
+                caseName.as_deref().unwrap_or("默认案件"),
+                &scheme.family,
+                &scheme.concat,
+                &scheme.salt_form,
+                &scheme.chain_input,
+                scheme.iterations,
+                &scheme.output_encoding,
+                r.self_test_passed,
+                &refs,
+            );
+        }
+        r
+    })
+    .await
+    .map_err(|e| format!("后台任务失败：{e}"))
+    .map(Ok)?
 }
 
 /// 爆破预估三件套（文档04-G）
@@ -218,8 +247,10 @@ pub async fn brute_estimate(scheme: crate::services::crypto::Scheme, mask: Strin
     Ok(brute_estimate_fn(&mask, &scheme))
 }
 
-/// 内置爆破（小空间；★自测不过不许跑 C-07）。DFS 穷举 CPU 密集，放阻塞线程池
+/// 内置爆破（小空间；★自测不过不许跑 C-07）。DFS 穷举 CPU 密集，放阻塞线程池；
+/// 作业结果落 brute_jobs 表（P2-3）。
 #[tauri::command]
+#[allow(non_snake_case)]
 pub async fn brute_run(
     recorder: tauri::State<'_, RecorderState>,
     scheme: crate::services::crypto::Scheme,
@@ -227,12 +258,35 @@ pub async fn brute_run(
     salt: String,
     known: Sample,
     max_candidates: Option<u64>,
+    caseName: Option<String>,
 ) -> Result<BruteResult, String> {
     let t0 = std::time::Instant::now();
     let mask_display = mask.clone();
     let family_display = scheme.family.clone();
     let r = tauri::async_runtime::spawn_blocking(move || {
-        brute_run_fn(&scheme, &mask, &salt, &known, max_candidates.unwrap_or(5_000_000))
+        let r = brute_run_fn(&scheme, &mask, &salt, &known, max_candidates.unwrap_or(5_000_000));
+        // 作业落库（失败不阻断：库不可用时爆破结果仍返回 UI）
+        let sets = crate::services::brute::expand_mask(&mask);
+        let total: u64 = sets.iter().map(|s| s.len() as u64).product();
+        let space = serde_json::json!({ "mask": mask, "total": total }).to_string();
+        let speed = if r.duration_ms > 0 {
+            r.tried as f64 / (r.duration_ms as f64 / 1000.0)
+        } else {
+            0.0
+        };
+        crate::store::brute_job_record(
+            caseName.as_deref().unwrap_or("默认案件"),
+            &space,
+            total,
+            speed,
+            "builtin",
+            r.self_test_passed,
+            if r.hit.is_some() { "hit" } else { "exhausted" },
+            r.hit.as_deref().unwrap_or(""),
+            r.hit.is_some(),
+            &r.note,
+        );
+        r
     })
     .await
     .map_err(|e| format!("后台任务失败：{e}"))?;
@@ -251,25 +305,33 @@ pub async fn brute_run(
     Ok(r)
 }
 
-/// 生成 C 专用爆破器骨架（无 hashcat 模式场景）
+/// 生成 C 专用爆破器骨架（无 hashcat 模式场景；掩码循环 + OpenMP + 强制自测）
 #[tauri::command]
 pub async fn brute_generate_c(
     scheme: crate::services::crypto::Scheme,
     sample: Sample,
+    mask: String,
 ) -> Result<serde_json::Value, String> {
-    let c = generate_c_skeleton(&scheme, &sample);
-    let dir = {
-        let cfg = crate::config::get();
-        crate::paths::cases_root(&cfg).join("jobs")
-    };
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let ts = chrono::Local::now().format("%Y%m%d-%H%M%S");
-    let path = dir.join(format!("brute-{ts}.c"));
-    // 写路径过 guard（P1-1）
-    crate::guard::guard_write_or_err(&path)?;
-    std::fs::write(&path, c).map_err(|e| e.to_string())?;
-    crate::audit::audit("brute_generate_c", &path.display().to_string(), "done", "restore-node", &scheme.family);
-    Ok(serde_json::json!({ "path": path.display().to_string() }))
+    if mask.trim().is_empty() {
+        return Err("掩码为空：先填爆破掩码（如 ?u?l?l?d?d?d?d?d?d）".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let c = generate_c_skeleton(&scheme, &sample, &mask);
+        let dir = {
+            let cfg = crate::config::get();
+            crate::paths::cases_root(&cfg).join("jobs")
+        };
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let ts = chrono::Local::now().format("%Y%m%d-%H%M%S");
+        let path = dir.join(format!("brute-{ts}.c"));
+        // 写路径过 guard（P1-1）
+        crate::guard::guard_write_or_err(&path)?;
+        std::fs::write(&path, c).map_err(|e| e.to_string())?;
+        crate::audit::audit("brute_generate_c", &path.display().to_string(), "done", "restore-node", &scheme.family);
+        Ok(serde_json::json!({ "path": path.display().to_string() }))
+    })
+    .await
+    .map_err(|e| format!("后台任务失败：{e}"))?
 }
 
 // ---------- M5：Evidence 台账 / 案卷包 ----------

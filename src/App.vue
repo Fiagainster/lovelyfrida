@@ -13,6 +13,7 @@ import { usePipelineStore } from "@/stores/pipeline";
 import { useSessionStore } from "@/stores/session";
 import { useTerminalStore } from "@/stores/terminal";
 import { useProbeStore } from "@/stores/probe";
+import { useDiagStore } from "@/stores/diagnostics";
 import { useSettingsStore } from "@/stores/settings";
 import { api } from "@/api";
 import { isTauri } from "@/utils/env";
@@ -33,6 +34,7 @@ const settings = useSettingsStore();
 const sessionStore = useSessionStore();
 const terminalStore = useTerminalStore();
 const probeStore = useProbeStore();
+const diag = useDiagStore();
 
 const activeComponent = computed(() => {
   if (app.activeView === "pipeline") return PipelineView;
@@ -107,10 +109,32 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
           </div>
         </main>
         <aside class="side-panel">
-          <div class="side-panel__header">诊断 / 详情</div>
+          <div class="side-panel__header">
+            诊断 / 详情
+            <span v-if="diag.cards.length" style="font-weight: 400; font-size: 11px">
+              （{{ diag.cards.length }} 张卡
+              <a style="cursor: pointer; text-decoration: underline" @click="diag.restoreAll()">恢复忽略</a>）
+            </span>
+          </div>
           <div class="side-panel__body">
+            <!-- 诊断卡片流（P2-1：规则引擎数据驱动，docs/05 48 条） -->
+            <div v-if="diag.cards.length" style="display: flex; flex-direction: column; gap: 8px">
+              <div v-for="d in diag.cards" :key="d.id" class="side-hint" style="flex-direction: column; align-items: stretch; gap: 4px">
+                <div style="display: flex; align-items: center; gap: 6px">
+                  <span :class="['status-chip', d.severity === 'block' ? 'status-chip--fail' : d.severity === 'warn' ? 'status-chip--warn' : 'status-chip--pending']">
+                    {{ d.severity === "block" ? "阻断" : d.severity === "warn" ? "警告" : "提示" }}
+                  </span>
+                  <b>{{ d.ruleId }}</b>
+                  <NButton size="tiny" quaternary style="margin-left: auto" @click="diag.ignore(d.ruleId)">忽略</NButton>
+                </div>
+                <span style="font-weight: 500">{{ d.title }}</span>
+                <span>真因：{{ d.cause }}</span>
+                <span v-for="(f, i) in d.fix" :key="i">{{ f }}</span>
+                <span style="color: var(--text-3)">出处：{{ d.source }}</span>
+              </div>
+            </div>
             <template v-if="pipeline.doctor">
-              <p style="margin: 0 0 8px; font-size: 12px; color: var(--text-2)">
+              <p style="margin: 12px 0 8px; font-size: 12px; color: var(--text-2)">
                 体检结论：{{ pipeline.doctor.overall }}
               </p>
               <div
@@ -122,9 +146,9 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
                 <span>{{ c.fix }}</span>
               </div>
             </template>
-            <p v-else style="color: var(--text-3); font-size: 12px">
-              诊断卡片将在此展示（症状 → 真因 → 处置 → 出处，文档05）。
-              诊断引擎 v1 于 M2 交付。
+            <p v-if="!diag.cards.length && !pipeline.doctor" style="color: var(--text-3); font-size: 12px">
+              诊断卡片将在此展示（症状 → 真因 → 处置 → 出处，文档05 · 48 条规则）。
+              跑一次体检 / 附加会话 / 挂探针后，命中的规则会以卡片形式出现。
             </p>
           </div>
         </aside>

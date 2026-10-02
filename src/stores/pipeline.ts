@@ -38,6 +38,8 @@ export const usePipelineStore = defineStore("pipeline", () => {
 
   function applyDoctorReport(report: DoctorReport) {
     doctor.value = report;
+    // 诊断规则引擎重算（E 组谓词依赖体检结果；低频动作直接重算）
+    void import("@/stores/diagnostics").then(({ useDiagStore }) => useDiagStore().reevaluate());
     const checks: CheckResult[] = report.checks;
     const pass = checks.filter((c) => c.status === "pass").length;
     const warn = checks.filter((c) => c.status === "warn").length;

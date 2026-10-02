@@ -4,12 +4,14 @@ import { NButton, NInput, NInputNumber, NSelect, NSwitch, NTag, useMessage } fro
 import { SearchOutline, AddOutline, TrashOutline, ArrowForwardOutline } from "@vicons/ionicons5";
 import { useProbeStore } from "@/stores/probe";
 import { useSessionStore } from "@/stores/session";
+import { useDiagStore } from "@/stores/diagnostics";
 import type { ProbeStat } from "@/api";
 import StatusLight from "@/components/StatusLight.vue";
 import DeepConsole from "@/components/DeepConsole.vue";
 
 /** 探针注入节点（M2）：探针工作台 / 探索器 / REPL 三 tab */
 const probe = useProbeStore();
+const diag = useDiagStore();
 const session = useSessionStore();
 const message = useMessage();
 
@@ -168,12 +170,20 @@ function statusLight(s: ProbeStat["status"]) {
 </script>
 
 <template>
-  <!-- 诊断卡片（先真因后处置，文档05） -->
-  <div v-if="probe.diagnostics.length" class="diag-cards">
-    <div v-for="d in probe.diagnostics" :key="d.id" class="diag-card">
-      <div class="diag-card__title">◑ {{ d.title }} <NTag size="tiny" :bordered="false">{{ d.rule }}</NTag></div>
+  <!-- 诊断卡片（规则引擎数据驱动，文档05：先真因后处置 + 出处） -->
+  <div v-if="diag.cards.length" class="diag-cards">
+    <div v-for="d in diag.cards" :key="d.id" class="diag-card">
+      <div class="diag-card__title">
+        <span :class="['status-chip', d.severity === 'block' ? 'status-chip--fail' : d.severity === 'warn' ? 'status-chip--warn' : 'status-chip--pending']">
+          {{ d.severity === "block" ? "阻断" : d.severity === "warn" ? "警告" : "提示" }}
+        </span>
+        {{ d.title }}
+        <NTag size="tiny" :bordered="false">{{ d.ruleId }}</NTag>
+        <NButton size="tiny" quaternary style="margin-left: auto" @click="diag.ignore(d.ruleId)">忽略</NButton>
+      </div>
       <div class="diag-card__cause">真因：{{ d.cause }}</div>
-      <div class="diag-card__fix">处置：{{ d.fix }}</div>
+      <div class="diag-card__fix">处置：<span v-for="(f, i) in d.fix" :key="i">{{ i > 0 ? " " : "" }}{{ f }}</span></div>
+      <div class="diag-card__cause" style="color: var(--text-3)">出处：{{ d.source }}</div>
     </div>
   </div>
 

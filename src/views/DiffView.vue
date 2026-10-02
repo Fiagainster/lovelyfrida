@@ -5,6 +5,7 @@ import { AddOutline, PlayOutline, TrashOutline } from "@vicons/ionicons5";
 import { api, type ExperimentReport, type ExperimentTemplate } from "@/api";
 import { useProbeStore } from "@/stores/probe";
 import { useSessionStore } from "@/stores/session";
+import { useCaseStore } from "@/stores/case";
 
 /** 差分视图（文档03 / 04-E / U3）：受控实验台 + 差分矩阵（变异度排序、结论=候选） */
 const probe = useProbeStore();
@@ -62,7 +63,7 @@ async function onRun() {
       },
       waitS: cfg.waitS,
       templates: templates.filter((t) => t.name.trim()),
-    });
+    }, useCaseStore().apiCaseName());
     message.success(`实验完成：${report.value.observations.length} 组观测`);
   } catch (e) {
     message.error(String(e));

@@ -169,6 +169,16 @@ pub fn export_markdown(case_name: &str) -> Result<String, String> {
     // 写路径过 guard（P1-1）：导出目标不得落在检材只读根
     crate::guard::guard_write_or_err(&path)?;
     std::fs::write(&path, md).map_err(|e| e.to_string())?;
+    // 产物登记（P2-3）：导出的 md 进 artifacts 台账
+    let sha = std::fs::read(&path)
+        .map(|b| {
+            use sha2::{Digest, Sha256};
+            let mut h = Sha256::new();
+            h.update(&b);
+            format!("{:x}", h.finalize())
+        })
+        .unwrap_or_default();
+    crate::store::artifact_record(case_name, "findings_md", &path.display().to_string(), &sha, "ledger");
     crate::audit::audit("ledger_export_md", &path.display().to_string(), "done", "ledger", case_name);
     Ok(path.display().to_string())
 }
@@ -202,6 +212,8 @@ pub fn export_bundle(case_name: &str) -> Result<String, String> {
         chrono::Local::now().to_rfc3339()
     );
     std::fs::write(bundle.join("README.md"), readme).map_err(|e| e.to_string())?;
+    // 产物登记（P2-3）：案卷包目录进 artifacts 台账（目录型产物不算哈希）
+    crate::store::artifact_record(case_name, "bundle_dir", &bundle.display().to_string(), "", "ledger");
     crate::audit::audit("ledger_export_bundle", &bundle.display().to_string(), "done", "ledger", case_name);
     Ok(bundle.display().to_string())
 }

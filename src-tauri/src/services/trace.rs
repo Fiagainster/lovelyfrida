@@ -16,6 +16,10 @@ pub struct RunState {
     #[allow(dead_code)] // 时间轴头部展示
     pub started_at: String,
     file: Mutex<std::fs::File>,
+    /// cases.db runs 行 id（P2-3；None=未落库，trace 文件照常写）
+    pub db_run_id: Option<i64>,
+    /// 已写入行数（stop 时回写 runs.line_count）
+    pub lines: AtomicU64,
 }
 
 #[derive(Default)]
@@ -32,10 +36,14 @@ pub struct TraceRecord {
 }
 
 impl TraceState {
-    pub fn start(&self, target: &str) -> String {
-        let mut run = self.run.lock().unwrap_or_else(|p| p.into_inner());
-        if run.is_some() {
-            return run.as_ref().unwrap().id.clone();
+    /// 开启 trace run：打开 jsonl 文件 + 落 runs 行（P2-3，失败不阻断）。
+    /// 注意：std Mutex 不得跨 await 持有——先快查、后重建锁插入。
+    pub async fn start(&self, target: &str, db_session_id: Option<i64>) -> String {
+        {
+            let run = self.run.lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(existing) = run.as_ref() {
+                return existing.id.clone();
+            }
         }
         let id = chrono::Local::now().format("%Y%m%d-%H%M%S%.3f").to_string();
         let dir = {
@@ -47,21 +55,48 @@ impl TraceState {
         let file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(path);
+            .open(&path);
+        // runs 行入库：run_id 未拿到（库不可用/未落 session）也照常写文件
+        let id_for_db = id.clone();
+        let db_run_id = tauri::async_runtime::spawn_blocking(move || {
+            crate::store::run_start(
+                db_session_id,
+                &format!("traces/run-{id_for_db}.jsonl"),
+                &chrono::Local::now().to_rfc3339(),
+            )
+        })
+        .await
+        .ok()
+        .flatten();
+        let mut run = self.run.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(existing) = run.as_ref() {
+            // 极端并发下以先到者为准（多插的一行 runs 无害，仅多一条孤儿索引）
+            return existing.id.clone();
+        }
         if let Ok(f) = file {
             *run = Some(RunState {
                 id: id.clone(),
                 file: Mutex::new(f),
                 target: target.into(),
                 started_at: chrono::Local::now().format("%H:%M:%S%.3f").to_string(),
+                db_run_id,
+                lines: AtomicU64::new(0),
             });
         }
         id
     }
 
-    pub fn stop(&self) -> Option<String> {
-        let mut run = self.run.lock().unwrap_or_else(|p| p.into_inner());
-        run.take().map(|r| r.id)
+    /// 结束 run：回写 runs 行（状态/结束时间/行数），返回 run id。
+    pub async fn stop(&self) -> Option<String> {
+        let run = self.run.lock().unwrap_or_else(|p| p.into_inner()).take()?;
+        let lines = run.lines.load(Ordering::SeqCst);
+        let db_run_id = run.db_run_id;
+        let ended = chrono::Local::now().to_rfc3339();
+        let _ = tauri::async_runtime::spawn_blocking(move || {
+            crate::store::run_finish(db_run_id, lines, "done", &ended)
+        })
+        .await;
+        Some(run.id)
     }
 
     #[allow(dead_code)] // M2 后续 run 索引使用
@@ -125,7 +160,9 @@ pub fn on_agent_message(
             if let Ok(mut f) = run.file.lock() {
                 use std::io::Write;
                 if let Ok(line) = serde_json::to_string(&rec) {
-                    let _ = writeln!(f, "{line}");
+                    if writeln!(f, "{line}").is_ok() {
+                        run.lines.fetch_add(1, Ordering::SeqCst);
+                    }
                 }
             }
             drop(guard);
@@ -148,7 +185,9 @@ pub fn on_agent_message(
     if let Ok(mut f) = run.file.lock() {
         use std::io::Write;
         if let Ok(line) = serde_json::to_string(&rec) {
-            let _ = writeln!(f, "{line}");
+            if writeln!(f, "{line}").is_ok() {
+                run.lines.fetch_add(1, Ordering::SeqCst);
+            }
         }
     }
     drop(guard);

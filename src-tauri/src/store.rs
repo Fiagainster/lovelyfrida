@@ -1,9 +1,9 @@
 //! cases.db（文档06 数据模型与存储）：SQLite 元数据库；
 //! trace 大文件一律落 `cases/traces/<run_id>.jsonl`，库内只存索引。
-//! 不允许「删库重建」：schema_version 逐级迁移（M0 建库，迁移在后续里程碑按需追加）。
+//! 不允许「删库重建」：schema_version 逐级迁移（M0 建库；v2 起为真实迁移链，见 migrate）。
 use rusqlite::Connection;
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 const DDL: &str = r#"
 CREATE TABLE IF NOT EXISTS cases (
@@ -96,7 +96,8 @@ CREATE TABLE IF NOT EXISTS experiments (
     case_id INTEGER NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
     title TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'open',
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    report_json TEXT DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS experiment_cases (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -167,6 +168,33 @@ CREATE INDEX IF NOT EXISTS idx_findings_case ON findings(case_id);
 CREATE INDEX IF NOT EXISTS idx_probes_session ON probes(session_id);
 "#;
 
+/// 逐级迁移（禁止删库重建）。DDL 始终是最终版 schema；老库按版本差补丁。
+/// SQLite 的 ALTER TABLE 只支持 ADD COLUMN，重列需 rename-recreate（关 FK 执行）。
+fn migrate(conn: &Connection, from: i64) -> Result<(), String> {
+    if from < 2 {
+        // v1→v2：experiments 增加实验报告 JSON 列（受控实验结果入库）
+        let has_col: bool = conn
+            .prepare("PRAGMA table_info(experiments)")
+            .and_then(|mut s| {
+                let mut rows = s.query([])?;
+                let mut found = false;
+                while let Some(r) = rows.next()? {
+                    let name: String = r.get(1)?;
+                    if name == "report_json" {
+                        found = true;
+                    }
+                }
+                Ok(found)
+            })
+            .map_err(|e| e.to_string())?;
+        if !has_col {
+            conn.execute_batch("ALTER TABLE experiments ADD COLUMN report_json TEXT DEFAULT '';")
+                .map_err(|e| format!("v1→v2 迁移失败：{e}"))?;
+        }
+    }
+    Ok(())
+}
+
 pub fn init() -> Result<(), String> {
     let path = crate::paths::cases_db_path();
     let conn = Connection::open(&path).map_err(|e| format!("打开 cases.db 失败：{e}"))?;
@@ -183,24 +211,281 @@ pub fn init() -> Result<(), String> {
         [],
     )
     .map_err(|e| e.to_string())?;
+    let existing: Option<String> = conn
+        .query_row("SELECT value FROM meta WHERE key='schema_version'", [], |r| r.get(0))
+        .map(Some)
+        .or_else(|e| {
+            if e == rusqlite::Error::QueryReturnedNoRows {
+                Ok(None)
+            } else {
+                Err(e)
+            }
+        })
+        .map_err(|e| e.to_string())?;
+    let current = existing
+        .as_ref()
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or(if existing.is_some() { i64::MAX } else { 0 });
+
+    // 既有库版本高于代码 → 拒绝打开（防降级写入）
+    if existing.is_some() && current > SCHEMA_VERSION {
+        return Err(format!(
+            "cases.db schema_version={current} 高于当前程序支持的 {SCHEMA_VERSION}，请升级程序"
+        ));
+    }
+    // 老库逐级迁移；新库（无版本记录）直接落当前版本
+    if existing.is_some() && current < SCHEMA_VERSION {
+        migrate(&conn, current)?;
+    }
     conn.execute(
         "INSERT INTO meta(key, value) VALUES ('schema_version', ?1)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         [SCHEMA_VERSION.to_string()],
     )
     .map_err(|e| e.to_string())?;
-
-    // 读回校验（既有库版本高于代码版本时报警，防止降级写入）
-    let v: i64 = conn
-        .query_row("SELECT value FROM meta WHERE key='schema_version'", [], |r| {
-            r.get::<_, String>(0)
-                .and_then(|s| s.parse::<i64>().map_err(|_| rusqlite::Error::InvalidColumnType(0, "schema_version".into(), rusqlite::types::Type::Text)))
-        })
-        .unwrap_or(0);
-    if v > SCHEMA_VERSION {
-        return Err(format!(
-            "cases.db schema_version={v} 高于当前程序支持的 {SCHEMA_VERSION}，请升级程序"
-        ));
-    }
     Ok(())
+}
+
+// ---------------- 落库辅助（P2-3，文档10：15 张表从 3 张有写入到核心链路全落库） ----------------
+// 全部自带 Connection（调用方在 spawn_blocking 里跑）；失败由调用方决定降级（不阻断主流程）。
+
+fn open_db() -> Result<Connection, String> {
+    let conn = Connection::open(crate::paths::cases_db_path())
+        .map_err(|e| format!("打开 cases.db 失败：{e}"))?;
+    conn.pragma_update(None, "foreign_keys", "ON")
+        .map_err(|e| e.to_string())?;
+    Ok(conn)
+}
+
+pub fn ensure_case_row(conn: &Connection, case_name: &str) -> Result<i64, String> {
+    let mut stmt = conn
+        .prepare("SELECT id FROM cases WHERE name = ?1")
+        .map_err(|e| e.to_string())?;
+    let existing: Option<i64> = stmt
+        .query_row([case_name], |r| r.get(0))
+        .map(Some)
+        .or_else(|e| if e == rusqlite::Error::QueryReturnedNoRows { Ok(None) } else { Err(e) })
+        .map_err(|e| e.to_string())?;
+    if let Some(id) = existing {
+        return Ok(id);
+    }
+    conn.execute(
+        "INSERT INTO cases(name, created_at) VALUES (?1, ?2)",
+        rusqlite::params![case_name, chrono::Local::now().to_rfc3339()],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// 会话开始：case→device→target→session 四级链一次性建齐，返回 session 行 id。
+pub fn session_start(
+    case_name: &str,
+    device_serial: Option<&str>,
+    target_display: &str,
+    channel: &str,
+    detail: &str,
+) -> Result<i64, String> {
+    let conn = open_db()?;
+    let case_id = ensure_case_row(&conn, case_name)?;
+    let device_id = match device_serial {
+        Some(serial) => {
+            let found: Option<i64> = conn
+                .query_row(
+                    "SELECT id FROM devices WHERE case_id = ?1 AND serial = ?2",
+                    rusqlite::params![case_id, serial],
+                    |r| r.get(0),
+                )
+                .map(Some)
+                .or_else(|e| {
+                    if e == rusqlite::Error::QueryReturnedNoRows {
+                        Ok(None)
+                    } else {
+                        Err(e)
+                    }
+                })
+                .map_err(|e| e.to_string())?;
+            match found {
+                Some(id) => {
+                    let _ = conn.execute(
+                        "UPDATE devices SET last_seen = ?2, state = 'device' WHERE id = ?1",
+                        rusqlite::params![id, chrono::Local::now().to_rfc3339()],
+                    );
+                    Some(id)
+                }
+                None => {
+                    conn.execute(
+                        "INSERT INTO devices(case_id, serial, state, last_seen) VALUES (?1, ?2, 'device', ?3)",
+                        rusqlite::params![case_id, serial, chrono::Local::now().to_rfc3339()],
+                    )
+                    .map_err(|e| e.to_string())?;
+                    Some(conn.last_insert_rowid())
+                }
+            }
+        }
+        None => None,
+    };
+    conn.execute(
+        "INSERT INTO targets(case_id, device_id, created_at) VALUES (?1, ?2, ?3)",
+        rusqlite::params![case_id, device_id, chrono::Local::now().to_rfc3339()],
+    )
+    .map_err(|e| e.to_string())?;
+    let target_id = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO sessions(target_id, channel, state, started_at, detail) VALUES (?1, ?2, 'running', ?3, ?4)",
+        rusqlite::params![
+            target_id,
+            channel,
+            chrono::Local::now().to_rfc3339(),
+            format!("{detail}｜target={target_display}")
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn session_finish(session_id: i64, state: &str, detail: &str) {
+    let Ok(conn) = open_db() else { return };
+    let _ = conn.execute(
+        "UPDATE sessions SET state = ?2, ended_at = ?3, detail = detail || ?4 WHERE id = ?1",
+        rusqlite::params![session_id, state, chrono::Local::now().to_rfc3339(), format!("｜{detail}")],
+    );
+}
+
+/// trace run 开启；session 未落库（db_session_id=None）时跳过，trace 文件照常写。
+pub fn run_start(session_id: Option<i64>, trace_path: &str, started_at: &str) -> Option<i64> {
+    let session_id = session_id?;
+    let conn = open_db().ok()?;
+    conn.execute(
+        "INSERT INTO runs(session_id, started_at, status, trace_path) VALUES (?1, ?2, 'running', ?3)",
+        rusqlite::params![session_id, started_at, trace_path],
+    )
+    .ok()?;
+    Some(conn.last_insert_rowid())
+}
+
+pub fn run_finish(run_id: Option<i64>, line_count: u64, status: &str, ended_at: &str) {
+    let Some(run_id) = run_id else { return };
+    let Ok(conn) = open_db() else { return };
+    let _ = conn.execute(
+        "UPDATE runs SET status = ?2, ended_at = ?3, line_count = ?4 WHERE id = ?1",
+        rusqlite::params![run_id, status, ended_at, line_count as i64],
+    );
+}
+
+/// 受控实验记录入库（v2：experiments.report_json）。
+pub fn experiment_record(case_name: &str, title: &str, report_json: &str, cases_json: &str) {
+    let Ok(conn) = open_db() else { return };
+    let Ok(case_id) = ensure_case_row(&conn, case_name) else { return };
+    let Ok(_) = conn.execute(
+        "INSERT INTO experiments(case_id, title, status, created_at, report_json) VALUES (?1, ?2, 'done', ?3, ?4)",
+        rusqlite::params![case_id, title, chrono::Local::now().to_rfc3339(), report_json],
+    ) else { return };
+    let experiment_id = conn.last_insert_rowid();
+    if let Ok(arr) = serde_json::from_str::<serde_json::Value>(cases_json) {
+        if let Some(list) = arr.as_array() {
+            for c in list {
+                let name = c.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let content = c.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                let _ = conn.execute(
+                    "INSERT INTO experiment_cases(experiment_id, name, input_kind, input_value, origin) VALUES (?1, ?2, 'template', ?3, 'manual')",
+                    rusqlite::params![experiment_id, name, content],
+                );
+            }
+        }
+    }
+}
+
+pub fn crypto_scheme_record(
+    case_name: &str,
+    family: &str,
+    concat: &str,
+    salt_form: &str,
+    chain_input: &str,
+    iterations: u64,
+    output_encoding: &str,
+    self_test_passed: bool,
+    evidence_refs: &str,
+) {
+    let Ok(conn) = open_db() else { return };
+    let Ok(case_id) = ensure_case_row(&conn, case_name) else { return };
+    let _ = conn.execute(
+        "INSERT INTO crypto_schemes(case_id, family, concat_order, salt_form, per_round_input, iteration, output_encoding, self_test_passed, evidence_refs)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        rusqlite::params![
+            case_id, family, concat, salt_form, chain_input, iterations, output_encoding,
+            self_test_passed as i64, evidence_refs
+        ],
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn brute_job_record(
+    case_name: &str,
+    space_json: &str,
+    candidates_total: u64,
+    est_speed: f64,
+    engine: &str,
+    self_test_passed: bool,
+    status: &str,
+    hit_value: &str,
+    reversed_verified: bool,
+    perf_note: &str,
+) {
+    let Ok(conn) = open_db() else { return };
+    let Ok(case_id) = ensure_case_row(&conn, case_name) else { return };
+    let _ = conn.execute(
+        "INSERT INTO brute_jobs(case_id, space, candidates_total, est_speed, engine, self_test_passed, status, hit_value, reversed_verified, perf_note)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        rusqlite::params![
+            case_id, space_json, candidates_total as i64, est_speed, engine,
+            self_test_passed as i64, status, hit_value, reversed_verified as i64, perf_note
+        ],
+    );
+}
+
+pub fn artifact_record(case_name: &str, kind: &str, path: &str, sha256: &str, created_by: &str) {
+    let Ok(conn) = open_db() else { return };
+    let Ok(case_id) = ensure_case_row(&conn, case_name) else { return };
+    let _ = conn.execute(
+        "INSERT INTO artifacts(case_id, kind, path, sha256, created_by, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![case_id, kind, path, sha256, created_by, chrono::Local::now().to_rfc3339()],
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_migrate_v1_to_v2() {
+        // 模拟 v1 库：老 experiments 表（无 report_json）→ 迁移后补列
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE experiments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                case_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'open',
+                created_at TEXT NOT NULL
+             );
+             CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             INSERT INTO meta VALUES ('schema_version', '1');
+             INSERT INTO experiments(case_id, title, created_at) VALUES (1, '老实验', '2026-01-01');",
+        )
+        .unwrap();
+        migrate(&conn, 1).unwrap();
+        let has_col: bool = conn
+            .prepare("PRAGMA table_info(experiments)")
+            .unwrap()
+            .query_map([], |r| {
+                let name: String = r.get(1)?;
+                Ok(name == "report_json")
+            })
+            .unwrap()
+            .any(|x| x.unwrap_or(false));
+        assert!(has_col, "v1→v2 迁移必须补上 report_json 列");
+        // 老数据仍在
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM experiments", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1);
+    }
 }

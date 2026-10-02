@@ -101,6 +101,7 @@ pub async fn run(
     frida: &crate::backends::frida::FridaChannelB,
     session_state: Option<&crate::services::session::FridaState>,
     exp: ExperimentConfig,
+    case_name: Option<String>,
 ) -> Result<ExperimentReport, String> {
     let adb = AdbBackend::detect(&cfg.adb_path, &cfg.doctor.adb_extra_paths).await?;
     let devices = adb.devices().await?;
@@ -257,10 +258,22 @@ pub async fn run(
     });
     let path = dir.join(format!("exp-{experiment_id}.json"));
     // 写路径过 guard（P1-1）
+    let report_json = serde_json::to_string_pretty(&record).unwrap_or_default();
     if let Err(e) = crate::guard::guard_write_or_err(&path) {
         tracing::warn!("[experiment] 实验记录落盘被拒绝：{e}");
-    } else if let Ok(s) = serde_json::to_string_pretty(&record) {
-        let _ = std::fs::write(path, s);
+    } else if !report_json.is_empty() {
+        let _ = std::fs::write(path, report_json.clone());
+    }
+    // 实验记录落库（P2-3）：experiments + experiment_cases；失败不阻断
+    {
+        let case = case_name.unwrap_or_else(|| "默认案件".into());
+        let title = format!("{}（{}）", exp.package, exp.probe.method);
+        let cases_json = serde_json::to_string(&exp.templates).unwrap_or_else(|_| "[]".into());
+        let report_clone = report_json.clone();
+        let _ = tauri::async_runtime::spawn_blocking(move || {
+            crate::store::experiment_record(&case, &title, &report_clone, &cases_json)
+        })
+        .await;
     }
     crate::audit::audit(
         "experiment_run",

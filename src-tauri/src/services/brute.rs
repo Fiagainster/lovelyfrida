@@ -166,55 +166,173 @@ pub fn run_builtin(
     }
 }
 
-/// C 专用爆破器骨架生成（writeup hcbrute4 风格：链式轮 PAD64 优化 + 强制自测 + 固定命中行）
-pub fn generate_c_skeleton(scheme: &Scheme, sample: &Sample) -> String {
+/// C 专用爆破器骨架生成（writeup hcbrute4 风格：链式轮优化 + 强制自测 + 掩码循环 + OpenMP）。
+/// P2-2（文档10）：此前 main() 只有自测桩，掩码循环是 TODO 空壳——现在完整生成。
+pub fn generate_c_skeleton(scheme: &Scheme, sample: &Sample, mask: &str) -> String {
     let iter = if scheme.chain_input.starts_with("单轮") { 1 } else { scheme.iterations };
     let chain_hex = scheme.chain_input.contains("hex");
+    // 家族 → 摘要长度 / OpenSSL 一次性函数（SHA-256 之外同样成立；自测门兜底正确性）
+    let (digest_len, hash_fn, hash_include, family_note) = match scheme.family.as_str() {
+        "SHA-1" => (20usize, "SHA1", "#include <openssl/sha.h>", "SHA-1（20 字节摘要）"),
+        "MD5" => (16, "MD5", "#include <openssl/md5.h>", "MD5（16 字节摘要）"),
+        _ => (32, "SHA256", "#include <openssl/sha.h>", "SHA-256（32 字节摘要）"),
+    };
+    let hex_len = digest_len * 2;
+
+    // 目标统一转小写 hex（base64 目标先解码；自测/比对都在 hex 域进行）
+    let target_hex = if scheme.output_encoding == "hex" {
+        sample.target.to_lowercase()
+    } else {
+        use base64::Engine;
+        match base64::engine::general_purpose::STANDARD.decode(&sample.target) {
+            Ok(d) => hex::encode(d),
+            Err(_) => sample.target.clone(),
+        }
+    };
+
+    // 掩码展开 → 每位字符集（与内置爆破同一套 token 语义）
+    let sets = expand_mask(mask);
+    let positions = sets.len();
+    let total: u64 = sets.iter().map(|s| s.len() as u64).product();
+    // 字符集用数值字节数组，规避 C 字符串 \x 转义的「贪心吞位」与引号转义问题
+    let set_decls: String = sets
+        .iter()
+        .enumerate()
+        .map(|(i, cs)| {
+            let bytes: Vec<String> = cs.iter().map(|c| format!("{}", *c as u32)).collect();
+            format!("static const char SET_{i}[] = {{{}, 0}};", bytes.join(","))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let set_refs: String = (0..positions).map(|i| format!("SET_{i}")).collect::<Vec<_>>().join(", ");
+    let set_lens: String = sets.iter().map(|s| format!("{}", s.len())).collect::<Vec<_>>().join(", ");
     let salt_b = sample.salt.as_bytes().to_vec();
-    let salt_literal: String = salt_b.iter().map(|b| format!("\\x{b:02x}")).collect();
+    let salt_bytes: Vec<String> = salt_b.iter().map(|b| format!("0x{b:02x}")).collect();
+
+    // 链式轮：hex 链输入是 2×摘要长的 hex 串；原始链输入直接用摘要（经 tmp 防止 in==out 别名）
+    let chain_loop = if iter > 1 && chain_hex {
+        format!(
+            r#"    /* 链式（输入=上轮摘要连写 hex，{hl} 字节） */
+    for (unsigned i = 1; i < ITER; i++) {{
+        unsigned char in{hl}[{hl}];
+        for (int j = 0; j < DIGEST_LEN; j++) {{
+            in{hl}[j * 2]     = (unsigned char)((out[j] >> 4) & 0xf) < 10
+                                  ? (unsigned char)('0' + ((out[j] >> 4) & 0xf))
+                                  : (unsigned char)('a' + ((out[j] >> 4) & 0xf) - 10);
+            in{hl}[j * 2 + 1] = (unsigned char)((out[j] & 0xf)) < 10
+                                  ? (unsigned char)('0' + (out[j] & 0xf))
+                                  : (unsigned char)('a' + (out[j] & 0xf) - 10);
+        }}
+        {fn}(in{hl}, {hl}, out);
+    }}"#,
+            hl = hex_len,
+            fn = hash_fn,
+        )
+    } else if iter > 1 {
+        format!(
+            r#"    /* 链式（输入=上轮原始摘要，经 tmp 防 in==out 别名） */
+    for (unsigned i = 1; i < ITER; i++) {{
+        unsigned char tmp[DIGEST_LEN];
+        memcpy(tmp, out, DIGEST_LEN);
+        {fn}(tmp, DIGEST_LEN, out);
+    }}"#,
+            fn = hash_fn,
+        )
+    } else {
+        String::new()
+    };
+
     format!(
         r#"/* LovelyFrida 生成的 C 专用爆破器（方案：{human}）
  * 编译：gcc -O3 -march=native -fopenmp -o brute brute.c -lcrypto
  * ★ 运行时先跑内置自测桩，不过即退出（C-07：改完爆破器必须先自测）
  * 命中输出固定格式：HIT pwd=<值>
+ * 家族说明：{family_note}
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <openssl/sha.h>
+{hash_include}
+#include <omp.h>
 
 #define ITER {iter}u
-static const unsigned char SALT[] = "{salt_literal}";
-static const unsigned char TARGET[] = "{target_hex}";
-static const unsigned char SELFTEST_PWD[] = "{selftest_pwd}";
+#define DIGEST_LEN {digest_len}
+#define POSITIONS {positions}
+#define TOTAL_SPACE {total}ULL
+static const unsigned char SALT[] = {{{salt_bytes}}};   /* 盐原始字节（{salt_form}） */
+static const char TARGET[] = "{target_hex}";
+static const char SELFTEST_PWD[] = "{selftest_pwd}";
 
-static void sha256_chain(const unsigned char *pwd, size_t pwdlen, unsigned char out[32]) {{
-    unsigned char buf[128];
+{set_decls}
+static const char *SETS[POSITIONS] = {{{set_refs}}};
+static const int SET_LEN[POSITIONS] = {{{set_lens}}};
+
+static void sha_chain(const unsigned char *pwd, size_t pwdlen, unsigned char out[DIGEST_LEN]) {{
+    unsigned char buf[512];
     size_t off = 0;
+    if (pwdlen + sizeof(SALT) > sizeof(buf)) return; /* 候选+盐超缓冲：直接放弃该候选 */
     memcpy(buf, pwd, pwdlen); off += pwdlen;
-    memcpy(buf + off, SALT, sizeof(SALT) - 1); off += sizeof(SALT) - 1;
-    SHA256(buf, off, out);   /* 首轮：{first} */
+    memcpy(buf + off, SALT, sizeof(SALT)); off += sizeof(SALT);
+    {hash_fn}(buf, off, out);   /* 首轮：{first} */
 {chain_loop}
 }}
 
-/* 链式轮优化说明（writeup 实测 ~2400 候选/秒/4核 vs 朴素 ~200）：
- * 摘要 hex 串恰 64 字节 → 预置填充块 + SHA256_Transform 省去 Update/Final */
-static const unsigned char PAD64[64] = {{0x80}};
+static volatile int found = 0;
+
+static void hexify(const unsigned char *digest, char *hexout) {{
+    for (int i = 0; i < DIGEST_LEN; i++)
+        sprintf(hexout + i * 2, "%02x", digest[i]);
+}}
 
 int main(void) {{
     /* ★ 强制自测桩（C-07）：用已知明文验证整条链 */
-    unsigned char out[32];
-    char hexout[65];
-    sha256_chain(SELFTEST_PWD, sizeof(SELFTEST_PWD) - 1, out);
-    for (int i = 0; i < 32; i++) sprintf(hexout + i * 2, "%02x", out[i]);
-    if (strcmp(hexout, (const char *)TARGET) != 0) {{
-        fprintf(stderr, "★自测失败：got %s want %s —— 拒绝全量跑\\n", hexout, TARGET);
+    unsigned char out[DIGEST_LEN];
+    char hexout[DIGEST_LEN * 2 + 1];
+    sha_chain((const unsigned char *)SELFTEST_PWD, sizeof(SELFTEST_PWD) - 1, out);
+    hexify(out, hexout);
+    if (strcmp(hexout, TARGET) != 0) {{
+        fprintf(stderr, "★自测失败：got %s want %s —— 拒绝全量跑\n", hexout, TARGET);
         return 1;
     }}
-    printf("自测通过，开始全量\\n");
-    /* TODO(生成器)：在此展开掩码循环（?u?l?d 各字符集）+ OpenMP 并行；
-       命中时 printf("HIT pwd=%s\\n", candidate); fflush(stdout); */
-    printf("骨架生成完成——掩码循环由 LovelyFrida 配置注入\\n");
+    printf("自测通过，开始全量：%llu 个候选（%d 位掩码）\n",
+           (unsigned long long)TOTAL_SPACE, POSITIONS);
+
+    /* 掩码循环：首位的字符集下标做 OpenMP 并行分片，其余位为串行里程表 */
+    #pragma omp parallel for schedule(dynamic)
+    for (int first = 0; first < SET_LEN[0]; first++) {{
+        if (found) continue;
+        int idx[POSITIONS];
+        char cand[POSITIONS + 1];
+        unsigned char out[DIGEST_LEN];
+        char hexout[DIGEST_LEN * 2 + 1];
+        idx[0] = first;
+        for (int i = 1; i < POSITIONS; i++) idx[i] = 0;
+        cand[POSITIONS] = '\0';
+        for (;;) {{
+            for (int i = 0; i < POSITIONS; i++) cand[i] = SETS[i][idx[i]];
+            sha_chain((const unsigned char *)cand, POSITIONS, out);
+            hexify(out, hexout);
+            if (strcmp(hexout, TARGET) == 0) {{
+                #pragma omp critical
+                {{
+                    if (!found) {{
+                        printf("HIT pwd=%s\n", cand);
+                        fflush(stdout);
+                        found = 1;
+                    }}
+                }}
+            }}
+            /* 里程表：推进第 1..POSITIONS-1 位；全部回卷则本分片结束 */
+            int pos = POSITIONS - 1;
+            while (pos >= 1) {{
+                if (++idx[pos] < SET_LEN[pos]) break;
+                idx[pos] = 0;
+                pos--;
+            }}
+            if (pos < 1) break;
+        }}
+    }}
+    if (!found) printf("全空间扫完，未命中\n");
     return 0;
 }}
 "#,
@@ -222,34 +340,22 @@ int main(void) {{
             "{}（{}，{}，迭代 {}，输出 {}）",
             scheme.family, scheme.concat, scheme.salt_form, iter, scheme.output_encoding
         ),
+        family_note = family_note,
+        hash_include = hash_include,
         iter = iter,
-        salt_literal = salt_literal,
-        target_hex = if scheme.output_encoding == "hex" {
-            sample.target.clone()
-        } else {
-            /* base64 目标先转 hex */
-            use base64::Engine;
-            match base64::engine::general_purpose::STANDARD.decode(&sample.target) {
-                Ok(d) => hex::encode(d),
-                Err(_) => sample.target.clone(),
-            }
-        },
+        digest_len = digest_len,
+        positions = positions,
+        total = total,
+        salt_bytes = salt_bytes.join(","),
+        salt_form = scheme.salt_form,
+        target_hex = target_hex,
         selftest_pwd = sample.plaintext,
+        set_decls = set_decls,
+        set_refs = set_refs,
+        set_lens = set_lens,
+        hash_fn = hash_fn,
         first = scheme.concat,
-        chain_loop = if chain_hex && iter > 1 {
-            r#"    /* 链式：输入恒 64 字节（hex 摘要串）→ SHA256_Transform 优化 */
-    for (unsigned i = 1; i < ITER; i++) {
-        unsigned char in64[64];
-        for (int j = 0; j < 32; j++) sprintf((char *)in64 + j * 2, "%02x", out[j]);
-        SHA256(in64, 64, out);
-    }"#
-        } else if iter > 1 {
-            r#"    for (unsigned i = 1; i < ITER; i++) {
-        SHA256(out, 32, out);
-    }"#
-        } else {
-            ""
-        },
+        chain_loop = chain_loop,
     )
 }
 
@@ -364,11 +470,36 @@ mod tests {
         let c = generate_c_skeleton(
             &scheme,
             &Sample { plaintext: "Abc123456".into(), salt: "Zr63".into(), target: "00ab".into() },
+            "?u?l?l?d?d?d?d?d?d",
         );
         assert!(c.contains("#define ITER 10000u"));
         assert!(c.contains("自测失败"));
         assert!(c.contains("HIT pwd="));
-        assert!(c.contains("SHA256_Transform") || c.contains("in64"));
+        assert!(c.contains("omp parallel for"), "掩码循环必须带 OpenMP 并行");
+        assert!(c.contains("static const char SET_0[]"), "掩码字符集必须展开为 C 数组");
+        assert!(c.contains("里程表"), "首位之外必须是串行里程表推进");
+        assert!(!c.contains("TODO"), "骨架不允许残留 TODO 空壳");
         assert!(c.contains("-lcrypto"));
+        // 盐必须用数值字节数组（\x 十六进制转义会贪心吞后续字节）
+        assert!(c.contains("static const unsigned char SALT[] = {0x"));
+    }
+
+    #[test]
+    fn test_c_skeleton_single_position_mask() {
+        // 1 位掩码：每个分片恰一个候选，不能死循环也不能漏
+        let scheme = single_scheme();
+        let salt = "s";
+        let mut inp = b"7".to_vec();
+        inp.extend_from_slice(salt.as_bytes());
+        let mut h = sha2::Sha256::new();
+        h.update(&inp);
+        let target = hex::encode(h.finalize());
+        let c = generate_c_skeleton(
+            &scheme,
+            &Sample { plaintext: "7".into(), salt: salt.into(), target },
+            "?d",
+        );
+        assert!(c.contains("#define POSITIONS 1"));
+        assert!(c.contains("for (int first = 0; first < SET_LEN[0]; first++)"));
     }
 }

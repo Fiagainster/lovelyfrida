@@ -173,6 +173,8 @@ export interface SessionSnapshot {
   hello: Record<string, unknown> | null;
   channel: string;
   updated_at: string;
+  /** cases.db sessions 行 id（None=落库跳过） */
+  db_session_id?: number | null;
 }
 
 /** 终端 */
@@ -227,8 +229,8 @@ export const api = {
   fridaServerInstall: () => invoke<StepReport[]>("frida_server_install"),
   fridaForwardSetup: () => invoke<StepReport>("frida_forward_setup"),
   fridaProcesses: () => invoke<ProcEntry[]>("frida_processes"),
-  fridaSessionAttach: (target: number | string) =>
-    invoke<SessionSnapshot>("frida_session_attach", { target }),
+  fridaSessionAttach: (target: number | string, caseName?: string) =>
+    invoke<SessionSnapshot>("frida_session_attach", { target, caseName }),
   fridaSessionDetach: () => invoke<SessionSnapshot>("frida_session_detach"),
   fridaSessionStatus: () => invoke<SessionSnapshot>("frida_session_status"),
   fridaSessionPing: () => invoke<Record<string, unknown>>("frida_session_ping"),
@@ -242,15 +244,15 @@ export const api = {
     invoke<void>("terminal_resize", { id, cols, rows }),
   terminalClose: (id: number) => invoke<void>("terminal_close", { id }),
 
-  // M4：算法还原 + 爆破
-  cryptoReconstruct: (samples: { plaintext: string; salt: string; target: string }[]) =>
-    invoke<CryptoReconstructResult>("crypto_reconstruct", { samples }),
+  // M4：算法还原 + 爆破（caseName 用于方案/作业落库）
+  cryptoReconstruct: (samples: { plaintext: string; salt: string; target: string }[], caseName?: string) =>
+    invoke<CryptoReconstructResult>("crypto_reconstruct", { samples, caseName }),
   bruteEstimate: (scheme: CryptoScheme, mask: string) =>
     invoke<BruteEstimate>("brute_estimate", { scheme, mask }),
-  bruteRun: (scheme: CryptoScheme, mask: string, salt: string, known: CryptoSample, maxCandidates?: number) =>
-    invoke<BruteResult>("brute_run", { scheme, mask, salt, known, maxCandidates }),
-  bruteGenerateC: (scheme: CryptoScheme, sample: CryptoSample) =>
-    invoke<{ path: string }>("brute_generate_c", { scheme, sample }),
+  bruteRun: (scheme: CryptoScheme, mask: string, salt: string, known: CryptoSample, maxCandidates?: number, caseName?: string) =>
+    invoke<BruteResult>("brute_run", { scheme, mask, salt, known, maxCandidates, caseName }),
+  bruteGenerateC: (scheme: CryptoScheme, sample: CryptoSample, mask: string, caseName?: string) =>
+    invoke<{ path: string }>("brute_generate_c", { scheme, sample, mask, caseName }),
 
   // M5：台账
   ledgerAdd: (payload: {
@@ -276,7 +278,7 @@ export const api = {
   // M3：回灌 + 实验
   injectionRun: (package_: string, files: { localPath: string; deviceDir: string; deviceName: string }[]) =>
     invoke<InjectionReport>("injection_run", { package: package_, files }),
-  experimentRun: (exp: ExperimentConfig) => invoke<ExperimentReport>("experiment_run", { exp }),
+  experimentRun: (exp: ExperimentConfig, caseName?: string) => invoke<ExperimentReport>("experiment_run", { exp, caseName }),
 
   // M2：agent RPC（探索器/探针/内存/REPL）
   fridaRpc: (f: string, args: unknown[]) => invoke<unknown>("frida_rpc", { f, args }),

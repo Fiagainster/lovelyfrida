@@ -38,6 +38,10 @@ async function onRun() {
   running.value = true;
   try {
     report.value = await api.injectionRun(pkg.value.trim(), valid);
+    // D 组诊断谓词触发器：回灌报告进诊断流（D-01~D-07）
+    void import("@/stores/diagnostics").then(({ useDiagStore }) => {
+      if (report.value) useDiagStore().reportInjection(report.value);
+    });
     if (report.value.overall === "pass") message.success("回灌完成，七步全绿");
     else if (report.value.overall === "warn") message.warning("回灌完成但含警告（看步骤详情与登录态预警）");
     else message.error("回灌失败（看失败步骤的处置）");
