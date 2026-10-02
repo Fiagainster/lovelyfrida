@@ -81,6 +81,8 @@ npx tauri build                   # ② NSIS 安装包（随包 adb / frida-serv
 产物：`src-tauri/target/release/bundle/nsis/LovelyFrida_0.2.0_x64-setup.exe`。
 安装后**零外部依赖**：adb 随包；frida-server 按设备 ABI 在运行时自动推送（S-01 版本矩阵一致）；通道B sidecar 为内置 exe（捆绑 Python + frida），开发态没有 exe 时自动回退 `python -u sidecar/frida_bridge.py`（需 `pip install frida`）。首启自检 FR-07 会明示当前 sidecar 启动方式。仅 frida 相关依赖在运行时由工具自行配置——这正是设计目标。
 
+**签名（可选）**：正式分发前用 `scripts/sign_installer.ps1` 签安装包（SHA256 + RFC3161 时间戳），消除 SmartScreen「未知发布者」；证书准备方式见脚本头注释。
+
 ## 五、二进制供给（不入库）
 
 `bin/` 下的可执行文件不入 git，按 `bin/binary_manifest.json`（入库）登记的 sha256 供给与校验：

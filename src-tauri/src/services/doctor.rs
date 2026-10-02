@@ -47,7 +47,7 @@ pub async fn run(cfg: &AppConfig, deep: bool) -> DoctorReport {
     let c6 = check_abi(&backend, &serial).await;
     let c7 = check_frida_client().await;
     let c8 = check_version_matrix(&backend, &serial, &c7).await;
-    let c9 = check_port_27042(&backend, &serial).await;
+    let c9 = check_port(&backend, &serial, cfg.frida_port).await;
     let c10 = check_storage(cfg);
     let checks = vec![c1, c2, c3, c4, c5, c6, c7, c8, c9, c10];
 
@@ -663,22 +663,24 @@ async fn check_version_matrix(
 }
 
 /// CHK-09 27042 端口：设备端实测监听（S-02/S-05）+ 本机占用（S-06）。
-async fn check_port_27042(backend: &Option<AdbBackend>, serial: &Option<String>) -> CheckResult {
+/// CHK-09 frida 端口：设备端实测监听（S-02/S-05）+ 本机占用（S-06）。
+/// 端口读配置（A4a：不再写死 27042）。
+async fn check_port(backend: &Option<AdbBackend>, serial: &Option<String>, port: u16) -> CheckResult {
     let t0 = std::time::Instant::now();
     let mut evidence: Vec<String> = Vec::new();
     let mut device_leg_done = false;
 
     if let (Some(b), Some(s)) = (backend, serial) {
         let out = b
-            .shell(s, "ss -tlnp 2>/dev/null | grep 27042 || echo NO_LISTENER", Duration::from_secs(10))
+            .shell(s, &format!("ss -tlnp 2>/dev/null | grep :{port} || echo NO_LISTENER"), Duration::from_secs(10))
             .await;
         match out {
             Ok(o) => {
                 let text = o.stdout.trim().to_string();
-                if text.contains("27042") && !text.contains("NO_LISTENER") {
-                    evidence.push(format!("✔ 设备端 27042 实测监听中：{text}"));
+                if text.contains(&port.to_string()) && !text.contains("NO_LISTENER") {
+                    evidence.push(format!("✔ 设备端 {port} 实测监听中：{text}"));
                 } else {
-                    evidence.push("✖ 设备端 27042 未监听（frida-server 未启动，M1 会话链路负责启动）".into());
+                    evidence.push(format!("✖ 设备端 {port} 未监听（frida-server 未启动，会话链路负责启动）"));
                 }
                 device_leg_done = true;
             }
@@ -686,14 +688,14 @@ async fn check_port_27042(backend: &Option<AdbBackend>, serial: &Option<String>)
         }
     }
 
-    // 本机 27042（S-06：被占自动换 27043）
-    let host_occupied = tokio::net::TcpStream::connect(("127.0.0.1", 27042))
+    // 本机端口（S-06：被占自动换备用）
+    let host_occupied = tokio::net::TcpStream::connect(("127.0.0.1", port))
         .await
         .is_ok();
     if host_occupied {
-        evidence.push("⚠ 本机 127.0.0.1:27042 已被占用（S-06：forward 时将自动改用 27043）".into());
+        evidence.push(format!("⚠ 本机 127.0.0.1:{port} 已被占用（S-06：forward 时将自动改用备用端口）"));
     } else {
-        evidence.push("本机 27042 空闲".into());
+        evidence.push(format!("本机 {port} 空闲"));
     }
 
     let status = if !device_leg_done {
@@ -706,16 +708,16 @@ async fn check_port_27042(backend: &Option<AdbBackend>, serial: &Option<String>)
         "warn"
     };
     let fix = if evidence.iter().any(|e| e.starts_with("✖")) {
-        Some("frida-server 未启动：M1 提供「启动并验证监听」动作（假绿灯以 ss -tlnp 为准，S-05）".into())
+        Some("frida-server 未启动：会话链路提供「安装并启动」动作（假绿灯以 ss -tlnp 为准，S-05）".into())
     } else {
         None
     };
     result(
         "CHK-09",
-        "27042 端口",
+        &format!("{port} 端口"),
         status,
         "S-02/S-05/S-06",
-        "adb shell \"ss -tlnp | grep 27042\"",
+        &format!("adb shell \"ss -tlnp | grep :{port}\""),
         evidence,
         fix,
         t0.elapsed().as_millis() as u64,

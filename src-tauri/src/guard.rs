@@ -35,12 +35,16 @@ fn lexical_clean(p: &std::path::Path) -> std::path::PathBuf {
 /// 规范化路径：先词法清理，再取最深存在祖先做 canonicalize，
 /// 避免「不存在所以无法校验」与「构造相对路径」两类绕过。
 pub fn normalize(path: &str) -> std::path::PathBuf {
-    let root = crate::paths::app_root();
+    normalize_in(&crate::paths::app_root(), path)
+}
+
+/// normalize 的纯函数核（A2：可测，不依赖全局 app_root）
+pub fn normalize_in(app_root: &std::path::Path, path: &str) -> std::path::PathBuf {
     let p = std::path::Path::new(path);
     let absolute = if p.is_absolute() {
         p.to_path_buf()
     } else {
-        root.join(p)
+        app_root.join(p)
     };
     let absolute = lexical_clean(&absolute);
     if let Ok(c) = absolute.canonicalize() {
@@ -69,8 +73,15 @@ fn is_under(path: &std::path::Path, root: &std::path::Path) -> bool {
 /// 判定 1+3（检材只读根 / source 段只读语义）：适用于工作区之外的合法写路径
 /// （cases\ 台账导出、脚本库、jobs），这些路径不走工作区约束但同样不得触碰检材。
 pub fn ensure_not_evidence(path: &str) -> GuardVerdict {
-    let normalized = normalize(path);
-    let cfg = crate::config::get();
+    ensure_not_evidence_in(&crate::config::get(), &crate::paths::app_root(), path)
+}
+
+pub fn ensure_not_evidence_in(
+    cfg: &crate::config::AppConfig,
+    app_root: &std::path::Path,
+    path: &str,
+) -> GuardVerdict {
+    let normalized = normalize_in(app_root, path);
 
     // 1) 检材只读根：命中即拒绝（机制，不是提醒）
     for r in &cfg.read_only_roots {
@@ -115,14 +126,26 @@ pub fn ensure_not_evidence(path: &str) -> GuardVerdict {
 }
 
 pub fn check_write(path: &str) -> GuardVerdict {
+    check_write_in(&crate::config::get(), &crate::paths::app_root(), path)
+}
+
+pub fn check_write_in(
+    cfg: &crate::config::AppConfig,
+    app_root: &std::path::Path,
+    path: &str,
+) -> GuardVerdict {
     // 规则 1+3 与非工作区写路径共用同一判定
-    let verdict = ensure_not_evidence(path);
+    let verdict = ensure_not_evidence_in(cfg, app_root, path);
     if !verdict.allowed {
         return verdict;
     }
-    let normalized = normalize(path);
-    let cfg = crate::config::get();
-    let workspace = crate::paths::workspace_root(&cfg);
+    let normalized = normalize_in(app_root, path);
+    // 工作区根同样过 normalize：Windows canonicalize 产生 \\?\ verbatim 前缀，
+    // 与配置字符串直接 starts_with 永不匹配（测试抓出的真 bug，A2）
+    let workspace = normalize_in(
+        app_root,
+        &crate::paths::workspace_root(cfg).display().to_string(),
+    );
 
     // 2) 必须落在工作区（处理后端只接受工作区路径）
     if !is_under(&normalized, &workspace) {
@@ -187,4 +210,93 @@ pub fn snapshot_file(src: &std::path::Path) -> Result<std::path::PathBuf, String
         &format!("{} -> {} sha256={}", src.display(), dest.display(), &sha[..16]),
     );
     Ok(dest)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::AppConfig;
+    use std::path::PathBuf;
+
+    /// 每个测试独立临时根（workspace + evidence 只读根），不依赖全局 config
+    fn test_env() -> (AppConfig, PathBuf) {
+        let root = std::env::temp_dir().join(format!("lf-guard-test-{}", std::process::id()));
+        let workspace = root.join("workspace");
+        let evidence = root.join("evidence");
+        let _ = std::fs::create_dir_all(&workspace);
+        let _ = std::fs::create_dir_all(&evidence);
+        let mut cfg = AppConfig::default();
+        cfg.workspace_root = workspace.display().to_string();
+        cfg.read_only_roots = vec![evidence.display().to_string()];
+        (cfg, root)
+    }
+
+    #[test]
+    fn lexical_clean_kills_traversal() {
+        // workspace\..\..\evidence 的构造绕过必须被词法清理戳穿（P1-2）
+        let (cfg, root) = test_env();
+        // workspace\..\evidence\x 语义上落在检材只读根内，必须被拒绝
+        let evil = root.join("workspace").join("..").join("evidence").join("db.sqlite");
+        let v = check_write_in(&cfg, &root, &evil.display().to_string());
+        assert!(!v.allowed, "穿越到检材只读根必须被拒绝：{}", v.reason);
+        // 断言用同一形式：evidence 根也过 normalize（对齐 canonicalize 的 verbatim 前缀）
+        let cleaned = normalize_in(&root, &evil.display().to_string());
+        let evidence_root = normalize_in(&root, &root.join("evidence").display().to_string());
+        assert!(cleaned.starts_with(&evidence_root));
+    }
+
+    #[test]
+    fn read_only_root_denied() {
+        let (cfg, root) = test_env();
+        let p = root.join("evidence").join("db.sqlite");
+        let v = check_write_in(&cfg, &root, &p.display().to_string());
+        assert!(!v.allowed);
+        assert!(v.reason.contains("只读根"));
+    }
+
+    #[test]
+    fn workspace_write_allowed() {
+        let (cfg, root) = test_env();
+        let p = root.join("workspace").join("work").join("out.txt");
+        let v = check_write_in(&cfg, &root, &p.display().to_string());
+        assert!(v.allowed, "{}", v.reason);
+    }
+
+    #[test]
+    fn outside_workspace_denied() {
+        let (cfg, root) = test_env();
+        let p = root.join("somewhere-else").join("x.txt");
+        let v = check_write_in(&cfg, &root, &p.display().to_string());
+        assert!(!v.allowed);
+        assert!(v.reason.contains("工作区"));
+    }
+
+    #[test]
+    fn source_segment_denied_even_in_workspace() {
+        let (cfg, root) = test_env();
+        let p = root.join("workspace").join("source").join("copy.apk");
+        let v = check_write_in(&cfg, &root, &p.display().to_string());
+        assert!(!v.allowed);
+        assert!(v.reason.contains("source"));
+    }
+
+    #[test]
+    fn source_segment_case_insensitive() {
+        let (cfg, root) = test_env();
+        let p = root.join("workspace").join("SOURCE").join("x.bin");
+        let v = ensure_not_evidence_in(&cfg, &root, &p.display().to_string());
+        assert!(!v.allowed, "SOURCE 大小写变体同样拒绝");
+    }
+
+    #[test]
+    fn evidence_export_allowed_outside_workspace() {
+        // cases\ 导出走 ensure_not_evidence：不受工作区约束，但检材根仍拒绝
+        let (cfg, root) = test_env();
+        let ok = root.join("cases").join("exports").join("x.md");
+        let v = ensure_not_evidence_in(&cfg, &root, &ok.display().to_string());
+        assert!(v.allowed, "{}", v.reason);
+        let bad = root.join("evidence").join("x.md");
+        let v2 = ensure_not_evidence_in(&cfg, &root, &bad.display().to_string());
+        assert!(!v2.allowed);
+    }
 }

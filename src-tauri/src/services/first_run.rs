@@ -75,21 +75,19 @@ pub async fn run() -> Result<FirstRunReport, String> {
         ),
     });
 
-    // FR-06 关键端口占用（本机侧）
+    // FR-06 关键端口占用（本机侧；A4a：读配置端口而非写死 27042）
     let mut port_detail = String::new();
-    let mut port_ok = true;
-    for p in [27042u16, 27043] {
+    for p in [cfg.frida_port, cfg.frida_port.saturating_add(1)] {
         let occupied = tokio::net::TcpStream::connect(("127.0.0.1", p)).await.is_ok();
         if occupied {
             port_detail.push_str(&format!("{p} 被占用；"));
-            if p == 27042 {
+            if p == cfg.frida_port {
                 port_detail.push_str("S-06：forward 时自动改用备用端口；");
             }
         } else {
             port_detail.push_str(&format!("{p} 空闲；"));
         }
     }
-    let _ = &mut port_ok;
     items.push(FirstRunItem {
         id: "FR-06".into(),
         name: "本机端口占用".into(),

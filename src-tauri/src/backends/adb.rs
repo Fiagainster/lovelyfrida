@@ -447,3 +447,34 @@ async fn query_running_server_path() -> Option<String> {
     }
     Some(text)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SAMPLE: &str = "List of devices attached\n\
+* daemon not running; starting now at tcp:5037\n\
+* daemon started successfully\n\
+127.0.0.1:16384 device product:muemu model:MUMU_DEVICE device:muemu transport_id:1\n\
+127.0.0.1:16385 offline\n\
+emulator-5554 unauthorized\n\n";
+
+    #[test]
+    fn parses_states_and_models() {
+        let devs = parse_devices(SAMPLE);
+        assert_eq!(devs.len(), 3, "标题行/daemon 行/空行必须跳过：{devs:?}");
+        assert_eq!(devs[0].serial, "127.0.0.1:16384");
+        assert_eq!(devs[0].state, "device");
+        assert_eq!(devs[0].model.as_deref(), Some("MUMU_DEVICE"));
+        assert_eq!(devs[1].state, "offline");
+        assert_eq!(devs[2].state, "unauthorized");
+        assert!(devs[2].model.is_none());
+    }
+
+    #[test]
+    fn empty_and_header_only() {
+        assert!(parse_devices("").is_empty());
+        assert!(parse_devices("List of devices attached\n").is_empty());
+        assert!(parse_devices("* daemon started successfully\n").is_empty());
+    }
+}
