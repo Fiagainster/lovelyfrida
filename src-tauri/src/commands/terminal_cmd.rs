@@ -15,8 +15,13 @@ pub async fn terminal_create(
 }
 
 #[tauri::command]
-pub async fn terminal_write(mgr: State<'_, TerminalMgr>, id: u32, data: String) -> Result<(), String> {
-    terminal::write(&mgr, id, &data).await
+pub async fn terminal_write(
+    mgr: State<'_, TerminalMgr>,
+    recorder: State<'_, crate::services::recorder::RecorderState>,
+    id: u32,
+    data: String,
+) -> Result<(), String> {
+    terminal::write(&mgr, &recorder, id, &data).await
 }
 
 #[tauri::command]

@@ -26,6 +26,9 @@ import TerminalDrawer from "@/components/TerminalDrawer.vue";
 import PipelineView from "@/views/PipelineView.vue";
 import TimelineView from "@/views/TimelineView.vue";
 import DiffView from "@/views/DiffView.vue";
+import TopologyView from "@/views/TopologyView.vue";
+import TerminalView from "@/views/TerminalView.vue";
+import LedgerConsole from "@/components/LedgerConsole.vue";
 import PlaceholderView from "@/views/PlaceholderView.vue";
 
 const app = useAppStore();
@@ -40,6 +43,9 @@ const activeComponent = computed(() => {
   if (app.activeView === "pipeline") return PipelineView;
   if (app.activeView === "timeline") return TimelineView;
   if (app.activeView === "diff") return DiffView;
+  if (app.activeView === "topology") return TopologyView;
+  if (app.activeView === "terminal") return TerminalView;
+  if (app.activeView === "ledger") return LedgerConsole;
   return PlaceholderView;
 });
 

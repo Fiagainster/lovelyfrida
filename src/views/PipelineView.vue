@@ -15,6 +15,8 @@ import {
 } from "@vicons/ionicons5";
 import { usePipelineStore } from "@/stores/pipeline";
 import { useSettingsStore } from "@/stores/settings";
+import { useAppStore } from "@/stores/app";
+import { useProbeStore } from "@/stores/probe";
 import { api, type AdbDevice, type AdbResolveReport, type ConnectReport } from "@/api";
 import { isTauri } from "@/utils/env";
 import StatusLight from "@/components/StatusLight.vue";
@@ -31,6 +33,8 @@ import LedgerConsole from "@/components/LedgerConsole.vue";
 /** 主视图：流水线（M0 = 环境体检 + 设备连接两个节点可用） */
 const pipeline = usePipelineStore();
 const settings = useSettingsStore();
+const app = useAppStore();
+const probe = useProbeStore();
 const message = useMessage();
 
 const activeNode = computed(() => pipeline.selectedNode);
@@ -314,6 +318,22 @@ onMounted(() => {
     </template>
 
     <!-- ============ 节点5：探针注入（M2） ============ -->
+    <!-- ============ 节点3：应用装载（阶段③落地：frida 会话装载即此节点） ============ -->
+    <template v-else-if="activeNode === 'load'">
+      <div class="view-head">
+        <div class="view-head__title">
+          <div class="view-head__icon"><AppsOutline size="18" /></div>
+          <div>
+            <h2>应用装载</h2>
+            <div class="view-head__sub">
+              frida-server 安装链（幂等）→ adb forward → 附加目标 → hello 握手（注入成功判据）· 通道 B/C 自动降级并明示
+            </div>
+          </div>
+        </div>
+      </div>
+      <SessionConsole />
+    </template>
+
     <template v-else-if="activeNode === 'probe'">
       <div class="view-head">
         <div class="view-head__title">
@@ -330,6 +350,52 @@ onMounted(() => {
     </template>
 
     <!-- ============ 节点4：数据回灌（M3） ============ -->
+    <!-- ============ 节点6：观测（阶段③落地：探针命中汇总 + 事件入口） ============ -->
+    <template v-else-if="activeNode === 'observe'">
+      <div class="view-head">
+        <div class="view-head__title">
+          <div class="view-head__icon"><EyeOutline size="18" /></div>
+          <div>
+            <h2>观测</h2>
+            <div class="view-head__sub">
+              探针命中汇总 · 结构化事件进时间轴（全量落 cases/traces/*.jsonl）· 深度观测见探针节点第 4 个页签
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="card info-card">
+        <h3>
+          探针命中汇总
+          <NTag size="small" :bordered="false">{{ probe.probes.length }} 个探针</NTag>
+          <NButton size="tiny" quaternary :loading="probe.statsLoading" @click="probe.refreshStats()">刷新</NButton>
+        </h3>
+        <table class="plain-table">
+          <thead>
+            <tr><th>探针</th><th style="width: 90px">状态</th><th style="width: 80px">命中</th><th style="width: 80px">错误</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="p in probe.probes" :key="p.id">
+              <td class="mono" style="font-size: 12px">{{ p.clazz }}.{{ p.method }}</td>
+              <td><StatusLight :status="p.status === 'active' ? 'pass' : p.status === 'waiting' ? 'running' : 'fail'" :size="8" /> {{ p.status }}</td>
+              <td class="mono">{{ p.hits }}</td>
+              <td class="mono">{{ p.errors }}</td>
+            </tr>
+            <tr v-if="probe.probes.length === 0">
+              <td colspan="4" class="muted" style="padding: 14px; text-align: center">
+                暂无探针。到「探针注入」节点填表挂钩，或用深度脚本/REPL 观测。
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="connect-row" style="margin-top: 10px">
+          <NButton size="small" secondary @click="app.activeView = 'timeline'">
+            打开时间轴（{{ probe.trace.length }} 条事件）
+          </NButton>
+          <NButton size="small" secondary @click="app.activeView = 'topology'">查看拓扑（钥匙链）</NButton>
+        </div>
+      </div>
+    </template>
+
     <template v-else-if="activeNode === 'inject'">
       <div class="view-head">
         <div class="view-head__title">
@@ -391,9 +457,9 @@ onMounted(() => {
         </div>
       </div>
       <div class="placeholder-view" style="height: 50vh">
-        <span>该节点在后续里程碑交付</span>
+        <span>该节点暂无内容</span>
         <span class="placeholder-view__milestone">
-          应用装载/数据回灌 → M1/M3 · 探针注入 → M2 · 观测 → M2 · 还原 → M4 · 归档 → M5
+          体检/连接/装载/回灌/探针/观测/还原/归档 八个节点均已落地——看到此页说明导航状态异常
         </span>
       </div>
     </template>

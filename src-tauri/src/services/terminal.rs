@@ -110,43 +110,71 @@ pub async fn create(
     Ok(info)
 }
 
-pub async fn write(mgr: &TerminalMgr, id: u32, data: &str) -> Result<(), String> {
-    let s = mgr.sessions.lock().await;
-    let t = s.get(&id).ok_or("终端会话不存在")?;
-    {
-        let mut w = t.writer.lock().map_err(|_| "writer 忙")?;
-        w.write_all(data.as_bytes())
-            .map_err(|e| format!("写入失败：{e}"))?;
-        w.flush().map_err(|e| format!("flush 失败：{e}"))?;
-    }
-    // 审计（文档08 可审计：终端手敲的命令必须留痕）：按行聚合，回车提交才入账；
-    // audit() 内部自带脱敏（P1-3），敏感值不会明文进 audit.log
-    let mut buf = t.line_buf.lock().map_err(|_| "忙")?;
-    buf.push_str(data);
-    while let Some(pos) = buf.find(['\r', '\n']) {
-        let line: String = buf.drain(..=pos).collect();
-        let line = line.trim();
-        if !line.is_empty() {
-            let shown: String = line.chars().take(200).collect();
-            crate::audit::audit(
-                "terminal_write",
-                &t.serial,
-                "done",
-                "terminal-drawer",
-                &format!("term#{id}: {shown}"),
-            );
+pub async fn write(
+    mgr: &TerminalMgr,
+    recorder: &crate::services::recorder::RecorderState,
+    id: u32,
+    data: &str,
+) -> Result<(), String> {
+    // 会话锁/写锁/行缓冲锁内完成全部同步操作（PTY 句柄非 Sync，不得跨 await 持引用），
+    // 锁外只拿 serial 与提交行列表做审计 + Recorder。
+    let (serial, committed, overflow) = {
+        let s = mgr.sessions.lock().await;
+        let t = s.get(&id).ok_or("终端会话不存在")?;
+        {
+            let mut w = t.writer.lock().map_err(|_| "writer 忙")?;
+            w.write_all(data.as_bytes())
+                .map_err(|e| format!("写入失败：{e}"))?;
+            w.flush().map_err(|e| format!("flush 失败：{e}"))?;
         }
-    }
-    // 防失控：无换行的超长输入（大段粘贴/编辑器行为）直接落账并清空
-    if buf.chars().count() > 2000 {
+        let mut overflow = false;
+        let mut committed = Vec::new();
+        {
+            let mut buf = t.line_buf.lock().map_err(|_| "忙")?;
+            buf.push_str(data);
+            while let Some(pos) = buf.find(['\r', '\n']) {
+                let line: String = buf.drain(..=pos).collect();
+                let line = line.trim().to_string();
+                if !line.is_empty() {
+                    committed.push(line);
+                }
+            }
+            // 防失控：无换行的超长输入（大段粘贴/编辑器行为）直接落账并清空
+            if buf.chars().count() > 2000 {
+                overflow = true;
+                buf.clear();
+            }
+        }
+        (t.serial.clone(), committed, overflow)
+    };
+    for line in &committed {
+        let shown: String = line.chars().take(200).collect();
         crate::audit::audit(
             "terminal_write",
-            &t.serial,
+            &serial,
             "done",
             "terminal-drawer",
-            &format!("term#{id}: (超长输入 {} 字节)", buf.len()),
+            &format!("term#{id}: {shown}"),
         );
-        buf.clear();
+        // Recorder：终端手敲命令录成 Step（等价命令即命令本身）
+        crate::services::recorder::record(
+            recorder,
+            "终端命令",
+            line,
+            serde_json::json!({ "serial": serial, "term": id }),
+            "手敲提交",
+            0,
+        )
+        .await;
+    }
+    if overflow {
+        crate::audit::audit(
+            "terminal_write",
+            &serial,
+            "done",
+            "terminal-drawer",
+            &format!("term#{id}: (超长输入已截断落账)"),
+        );
     }
     Ok(())
 }

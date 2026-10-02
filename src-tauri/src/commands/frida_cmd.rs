@@ -57,13 +57,31 @@ pub async fn frida_forward_setup() -> Result<StepReport, String> {
     Ok(info.step)
 }
 
-/// 进程/应用枚举（分组：system/user）
+/// 进程/应用枚举（分组：system/user）；通道B 失败时按 P3-4 降级 frida-ps 解析
 #[tauri::command]
 pub async fn frida_processes(
     state: tauri::State<'_, FridaState>,
 ) -> Result<Vec<ProcEntry>, String> {
     let cfg = crate::config::get();
-    enumerate_processes(&cfg, &state.channel).await
+    match enumerate_processes(&cfg, &state.channel).await {
+        Ok(p) => Ok(p),
+        Err(be) => {
+            if !crate::backends::frida_c::FridaChannelC::available().await {
+                return Err(be);
+            }
+            let host_port = state
+                .session
+                .lock()
+                .await
+                .forward_host_port
+                .unwrap_or(cfg.frida_port);
+            let rows = crate::backends::frida_c::enumerate_processes_cli("127.0.0.1", host_port)
+                .await
+                .map_err(|e| format!("{be}；通道C 兜底也失败：{e}"))?;
+            tracing::info!("[通道C] 进程枚举兜底成功（{} 项）", rows.len());
+            Ok(crate::services::session::proc_entries_from_pairs(rows))
+        }
+    }
 }
 
 /// 附加到目标（pid 或进程名），走完整链路并等待 hello；caseName 用于会话落库（P2-3）
@@ -143,6 +161,12 @@ pub async fn frida_rpc(
     args: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let s = state.session.lock().await;
+    // 通道C（CLI 兜底）不支持交互式 RPC：诚实报错，不假装（文档10 P3-4 能力边界）
+    if s.channel == "C" {
+        return Err(format!(
+            "通道 C（CLI 兜底）不支持交互式 RPC（{f}）：探针/探索器/REPL 需要通道 B（安装 Python + frida，或在设置中选通道 B）"
+        ));
+    }
     let Some(script_id) = s.script_id else {
         return Err("无活动脚本会话：先附加目标".into());
     };

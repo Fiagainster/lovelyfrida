@@ -609,9 +609,46 @@ async fn check_version_matrix(
             "warn",
             Some("设备端尚未推送 frida-server：M1 会话链路将自动推送匹配版本".into()),
         )
+    } else if let (Some(b), Some(s)) = (backend, serial) {
+        // 设备端运行版本实测（阶段③：不再用 M1 占位文案）——server 同款探测
+        let ver_out = b
+            .shell(
+                s,
+                "su -c '/data/local/tmp/frida-server --version' 2>/dev/null || echo unknown",
+                Duration::from_secs(15),
+            )
+            .await;
+        let running = ver_out
+            .ok()
+            .map(|o| {
+                o.stdout
+                    .trim()
+                    .trim_end_matches("unknown")
+                    .trim()
+                    .to_string()
+            })
+            .filter(|v| !v.is_empty());
+        match running {
+            Some(v) => {
+                evidence.push(format!("③½ 设备端运行版本实测：{v}"));
+                if v == client_version {
+                    ("pass", None)
+                } else {
+                    (
+                        "warn",
+                        Some(format!(
+                            "设备端运行 {v} ≠ 客户端 {client_version}（S-01）：会话链路将 pkill 后推送匹配版"
+                        )),
+                    )
+                }
+            }
+            None => (
+                "warn",
+                Some("设备端文件已存在但未运行（--version 无输出）：会话链路将自动启动匹配版本".into()),
+            ),
+        }
     } else {
-        // 设备端运行版本的实测在 M1（通道接入后经 frida 探测）
-        ("warn", Some("设备端文件已存在，运行版本实测在 M1 通道接入后进行".into()))
+        ("warn", Some("无设备可实测运行版本".into()))
     };
     result(
         "CHK-08",

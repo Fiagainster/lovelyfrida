@@ -165,9 +165,9 @@ onMounted(() => {
   <!-- ============ 附加链路状态机 ============ -->
   <div class="card info-card">
     <h3>
-      附加会话（通道{{ session.session?.channel ?? "B" }}）
+      附加会话（通道{{ session.session?.channel ?? "B" }}{{ session.session?.channel === "C" ? " · CLI 兜底，仅观测" : "" }}）
       <span v-if="session.session?.phase === 'running'" class="status-chip status-chip--pass">
-        session#{{ session.session.session_id }} · {{ session.session.target }}
+        {{ session.session.session_id != null ? `session#${session.session.session_id}` : "已附加" }} · {{ session.session.target }}
       </span>
       <span v-else-if="session.session?.phase === 'failed'" class="status-chip status-chip--fail">
         链路失败（保留现场，可单步重试）

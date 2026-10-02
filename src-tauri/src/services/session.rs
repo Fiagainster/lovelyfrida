@@ -63,13 +63,19 @@ impl Default for SessionSnapshot {
 /// tauri managed state
 pub struct FridaState {
     pub channel: FridaChannelB,
+    /// 通道C（frida CLI 兜底，文档10 P3-4）：观测级降级
+    pub channel_c: std::sync::Arc<crate::backends::frida_c::FridaChannelC>,
+    /// preferred_channel（auto|a|b|c）：驱动 attach 的通道选择，UI 必须明示当前通道
+    pub preferred_channel: String,
     pub session: Mutex<SessionSnapshot>,
 }
 
 impl FridaState {
-    pub fn new(python: String) -> Self {
+    pub fn new(python: String, preferred_channel: String) -> Self {
         Self {
             channel: FridaChannelB::new(python),
+            channel_c: std::sync::Arc::new(crate::backends::frida_c::FridaChannelC::new()),
+            preferred_channel,
             session: Mutex::new(SessionSnapshot::default()),
         }
     }
@@ -435,10 +441,86 @@ pub async fn attach(
         let _ = app.emit("session-state", s.clone());
     }
 
-    // 事件订阅必须在 attach 之前建立（broadcast 不回放历史）
-    let mut rx = attach_step(app, state, state.channel.subscribe().await, "事件通道订阅失败").await?;
+    // ---- 通道选择（文档10 P3-4）：auto 先 B，B 不可用降级 C；当前通道必须 UI 明示 ----
+    let use_c = match state.preferred_channel.as_str() {
+        "a" => {
+            return fail(
+                app,
+                state,
+                "通道 A（Rust 原生绑定）为远期计划：当前可用通道为 B（Python sidecar）/ C（CLI 兜底），请在设置中调整",
+            )
+            .await
+        }
+        "c" => true,
+        "b" => false,
+        _ => match state.channel.subscribe().await {
+            Ok(_) => false, // sidecar 可启动 → 通道 B
+            Err(e) => {
+                if crate::backends::frida_c::FridaChannelC::available().await {
+                    let mut s = state.session.lock().await;
+                    s.evidence
+                        .push(format!("通道 B 不可用（{e}）→ 降级通道 C（CLI 兜底，仅观测）"));
+                    let snap = s.clone();
+                    drop(s);
+                    let _ = app.emit("session-state", snap);
+                    true
+                } else {
+                    return fail(
+                        app,
+                        state,
+                        &format!("通道 B 不可用（{e}），且通道 C 依赖的 frida CLI 未找到：无可用通道"),
+                    )
+                    .await;
+                }
+            }
+        },
+    };
 
-    let host_port = state.session.lock().await.forward_host_port.unwrap_or(cfg.frida_port);
+    let host_port = state
+        .session
+        .lock()
+        .await
+        .forward_host_port
+        .unwrap_or(cfg.frida_port);
+
+    if use_c {
+        let rx = state.channel_c.subscribe();
+        attach_step(
+            app,
+            state,
+            state
+                .channel_c
+                .attach_and_load(app.clone(), "127.0.0.1", host_port, &target_display(&target))
+                .await,
+            "通道C 附加失败",
+        )
+        .await?;
+        {
+            let mut s = state.session.lock().await;
+            s.phase = SessionPhase::Attached;
+            s.session_id = None;
+            s.script_id = Some(crate::backends::frida_c::VIRTUAL_SCRIPT_ID);
+            s.channel = "C".into();
+            s.evidence
+                .push("通道C（CLI 兜底）已附加：观测可用；探针/探索器/REPL 需通道B".into());
+            let _ = app.emit("session-state", s.clone());
+        }
+        return wait_hello(
+            app,
+            state,
+            rx,
+            crate::backends::frida_c::VIRTUAL_SCRIPT_ID,
+            &target,
+            case_name,
+            "c",
+            "当前通道：C（CLI 兜底）",
+        )
+        .await;
+    }
+
+    // ---- 通道 B ----
+    // 事件订阅必须在 attach 之前建立（broadcast 不回放历史）
+    let rx = attach_step(app, state, state.channel.subscribe().await, "事件通道订阅失败").await?;
     let (session_id, script_id) = attach_step(
         app,
         state,
@@ -453,11 +535,37 @@ pub async fn attach(
         s.session_id = Some(session_id);
         s.script_id = Some(script_id);
         s.target = Some(target_display(&target));
-        s.evidence.push(format!("attach 成功 session#{session_id}，core agent 已加载 script#{script_id}"));
+        s.evidence.push(format!(
+            "attach 成功 session#{session_id}，core agent 已加载 script#{script_id}"
+        ));
         let _ = app.emit("session-state", s.clone());
     }
 
-    // 等待 hello（注入成功判据，6s 超时）
+    wait_hello(
+        app,
+        state,
+        rx,
+        script_id,
+        &target,
+        case_name,
+        "b",
+        "当前通道：B（Python sidecar）",
+    )
+    .await
+}
+
+/// 等待 hello（注入成功判据，6s 超时）→ 成功即 Running + 落库 + 开 trace。
+/// B/C 两路共用：hello 循环与通道无关，事件形状一致（C 走 send-shim 回流）。
+async fn wait_hello(
+    app: &tauri::AppHandle,
+    state: &FridaState,
+    mut rx: tokio::sync::broadcast::Receiver<FridaEvent>,
+    script_id: u64,
+    target: &Value,
+    case_name: Option<String>,
+    channel_db: &str,
+    channel_evidence: &str,
+) -> Result<SessionSnapshot, String> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(6);
     loop {
         let now = tokio::time::Instant::now();
@@ -484,15 +592,17 @@ pub async fn attach(
                                     payload.as_ref().and_then(|p| p.get("pid")).and_then(|v| v.as_u64()).unwrap_or(0),
                                     payload.as_ref().and_then(|p| p.get("java")).and_then(|v| v.as_str()),
                                 ));
+                                s.evidence.push(channel_evidence.to_string());
                                 s.updated_at = chrono::Local::now().format("%H:%M:%S%.3f").to_string();
                                 // 落库（P2-3）：case→device→target→session；失败不阻断分析
                                 let db_case = case_name
                                     .clone()
                                     .unwrap_or_else(|| "默认案件".into());
                                 let serial_db = s.device.clone();
-                                let tgt_display = target_display(&target);
+                                let tgt_display = target_display(target);
+                                let ch = channel_db.to_string();
                                 let db_result = tauri::async_runtime::spawn_blocking(move || {
-                                    crate::store::session_start(&db_case, serial_db.as_deref(), &tgt_display, "b", "attach 成功（hello 握手通过）")
+                                    crate::store::session_start(&db_case, serial_db.as_deref(), &tgt_display, &ch, "attach 成功（hello 握手通过）")
                                 })
                                 .await;
                                 match db_result {
@@ -516,7 +626,7 @@ pub async fn attach(
                                     snap.target.as_deref().unwrap_or(""),
                                     "done",
                                     "session-console",
-                                    &format!("session#{session_id} script#{script_id}"),
+                                    &format!("channel={channel_db} script#{script_id}"),
                                 );
                                 return Ok(snap);
                             }
@@ -565,14 +675,20 @@ pub async fn detach(app: &tauri::AppHandle, state: &FridaState) -> Result<Sessio
     let mut s = state.session.lock().await;
     // 分离是尽力而为的清理：单步失败不阻断后续步骤，但必须留痕而不是吞掉
     let mut errors: Vec<String> = Vec::new();
-    if let Some(script_id) = s.script_id {
-        if let Err(e) = state.channel.call("unload_script", json!({"script_id": script_id})).await {
-            errors.push(format!("卸载脚本 script#{script_id} 失败：{e}"));
+    if s.channel == "C" {
+        // 通道C：CLI 子进程就是会话本体，杀进程即卸载
+        state.channel_c.detach().await;
+        s.evidence.push("通道C CLI 进程已终止（脚本随之卸载）".into());
+    } else {
+        if let Some(script_id) = s.script_id {
+            if let Err(e) = state.channel.call("unload_script", json!({"script_id": script_id})).await {
+                errors.push(format!("卸载脚本 script#{script_id} 失败：{e}"));
+            }
         }
-    }
-    if let Some(session_id) = s.session_id {
-        if let Err(e) = state.channel.call("detach", json!({"session_id": session_id})).await {
-            errors.push(format!("detach session#{session_id} 失败：{e}"));
+        if let Some(session_id) = s.session_id {
+            if let Err(e) = state.channel.call("detach", json!({"session_id": session_id})).await {
+                errors.push(format!("detach session#{session_id} 失败：{e}"));
+            }
         }
     }
     s.phase = SessionPhase::Stopped;
@@ -660,6 +776,17 @@ pub struct ProcEntry {
     pub running: bool,
 }
 
+/// 系统/用户进程分类（枚举两路共用：通道B sidecar / 通道C frida-ps）
+fn proc_is_system(pid: u32, name: &str) -> bool {
+    pid < 1000
+        || name.starts_with("android.")
+        || name.starts_with("com.android.")
+        || name.starts_with("com.google.")
+        || name.starts_with("com.qualcomm")
+        || name.starts_with("com.mediatek")
+        || name.starts_with("system")
+}
+
 pub async fn enumerate_processes(cfg: &AppConfig, frida: &FridaChannelB) -> Result<Vec<ProcEntry>, String> {
     // 先确保 forward 存在并取主机侧端口（S-06：主机端口可能与设备端口不同）
     let adb = AdbBackend::detect(&cfg.adb_path, &cfg.doctor.adb_extra_paths).await?;
@@ -694,13 +821,7 @@ pub async fn enumerate_processes(cfg: &AppConfig, frida: &FridaChannelB) -> Resu
         for p in list {
             let pid = p.get("pid").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
             let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let system = pid < 1000
-                || name.starts_with("android.")
-                || name.starts_with("com.android.")
-                || name.starts_with("com.google.")
-                || name.starts_with("com.qualcomm")
-                || name.starts_with("com.mediatek")
-                || name.starts_with("system");
+            let system = proc_is_system(pid, &name);
             out.push(ProcEntry {
                 pid,
                 group: if system { "system".into() } else { "user".into() },
@@ -711,4 +832,22 @@ pub async fn enumerate_processes(cfg: &AppConfig, frida: &FridaChannelB) -> Resu
     }
     out.sort_by(|a, b| b.pid.cmp(&a.pid));
     Ok(out)
+}
+
+/// 通道C 兜底枚举：frida-ps 解析 → 同款分组（running 徽标不可得，恒 false）
+pub fn proc_entries_from_pairs(pairs: Vec<(u32, String)>) -> Vec<ProcEntry> {
+    let mut out: Vec<ProcEntry> = pairs
+        .into_iter()
+        .map(|(pid, name)| {
+            let system = proc_is_system(pid, &name);
+            ProcEntry {
+                pid,
+                group: if system { "system".into() } else { "user".into() },
+                name,
+                running: false,
+            }
+        })
+        .collect();
+    out.sort_by(|a, b| b.pid.cmp(&a.pid));
+    out
 }

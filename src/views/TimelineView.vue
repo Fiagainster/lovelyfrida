@@ -22,7 +22,7 @@ interface TimelineRow {
 }
 
 const liveRows = computed<TimelineRow[]>(() =>
-  probe.trace.slice(0, 300).map((r: TraceRecord) => {
+  probe.trace.slice(0, visibleCount.value).map((r: TraceRecord) => {
     const p = r.payload;
     const args = (p.args as { k: string; v: string }[] | undefined) ?? [];
     return {
@@ -37,6 +37,59 @@ const liveRows = computed<TimelineRow[]>(() =>
     };
   }),
 );
+
+// 渐进加载（O-02）：DOM 只渲染前 N 条，「加载更多」扩窗；全量始终在内存环 + jsonl
+const visibleCount = ref(300);
+const hasMore = computed(() => probe.trace.length > visibleCount.value);
+
+function loadMore() {
+  visibleCount.value += 500;
+}
+
+function download(name: string, content: string, mime: string) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function tsStamp(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
+function csvCell(v: string): string {
+  return `"${v.replace(/"/g, '""')}"`;
+}
+
+function exportCsv() {
+  const head = "seq,wall,kind,target,thread,args,ret";
+  const lines = probe.trace.map((r: TraceRecord) => {
+    const p = r.payload;
+    const args = (p.args as { k: string; v: string }[] | undefined) ?? [];
+    const ret = (p.ret as { k: string; v: string } | undefined) ?? null;
+    return [
+      String(r.seq),
+      r.wall,
+      String(p.t ?? ""),
+      `${String(p.clazz ?? "")}.${String(p.method ?? "")}`,
+      String(p.thread ?? ""),
+      args.map((a) => `${a.k}:${a.v}`).join(" | "),
+      ret ? `${ret.k}:${ret.v}` : "",
+    ]
+      .map(csvCell)
+      .join(",");
+  });
+  download(`timeline-${tsStamp()}.csv`, "\uFEFF" + [head, ...lines].join("\n"), "text/csv;charset=utf-8");
+}
+
+function exportJson() {
+  download(`timeline-${tsStamp()}.json`, JSON.stringify(probe.trace, null, 2), "application/json");
+}
 
 // 真暂停：事件照常写入 probe.trace 环形缓冲（不丢数据），仅冻结本视图渲染
 const paused = ref(false);
@@ -80,6 +133,8 @@ onMounted(() => {
           <template #icon><component :is="paused ? PlayOutline : PauseOutline" /></template>
           {{ paused ? "继续" : "暂停" }}
         </NButton>
+        <NButton size="small" quaternary :disabled="probe.trace.length === 0" @click="exportCsv">导出 CSV</NButton>
+        <NButton size="small" quaternary :disabled="probe.trace.length === 0" @click="exportJson">导出 JSON</NButton>
         <NButton size="small" quaternary type="warning" @click="probe.clearTrace()">
           <template #icon><TrashOutline /></template>
           清空视图
@@ -118,6 +173,11 @@ onMounted(() => {
         </tr>
       </tbody>
     </table>
+    <div v-if="hasMore" style="text-align: center; padding: 10px">
+      <NButton size="small" secondary @click="loadMore">
+        加载更多（已显示 {{ rows.length }} / {{ probe.trace.length }} 条）
+      </NButton>
+    </div>
 
     <!-- 下钻 modal -->
     <NModal

@@ -167,6 +167,8 @@ export interface SessionSnapshot {
   phase: SessionPhase;
   evidence: string[];
   device: string | null;
+  /** forward 的主机侧端口（S-06：与设备端口不一致时由探测得出） */
+  forward_host_port?: number | null;
   target: string | null;
   session_id: number | null;
   script_id: number | null;

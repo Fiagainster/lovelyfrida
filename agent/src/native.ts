@@ -96,9 +96,11 @@ interface NativeProbeState {
 }
 
 export const nativeProbes = new Map<string, NativeProbeState>();
+// 真 detach（文档10 P3-3）：attach 返回的 listener 句柄按探针 id 管理
+const nativeListeners = new Map<string, InvocationListener>();
 
 export function addNativeProbes(
-  decls: { id: string; module: string; target: string; maxLen?: number }[],
+  decls: { id: string; module: string; target: string; maxLen?: number; captureRet?: boolean }[],
 ): { results: { id: string; status: string; error: string | null }[] } {
   const results: { id: string; status: string; error: string | null }[] = [];
   for (const decl of decls) {
@@ -122,14 +124,16 @@ export function addNativeProbes(
         addr = (Module as unknown as { getExportByName: (m: string, e: string) => NativePointer }).getExportByName(decl.module, decl.target);
       }
       const maxLen = decl.maxLen ?? 64;
-      Interceptor.attach(addr, {
+      // captureRet：onEnter 暂存 payload（按线程栈，支持递归），onLeave 补 ret 后同事件发送（与 java.ts 一致）
+      const pendingStacks = new Map<number, Record<string, unknown>[]>();
+      const listener = Interceptor.attach(addr, {
         onEnter(args) {
           st.hits++;
           const enc: EncValue[] = [];
           for (let i = 0; i < 4; i++) {
             enc.push(encodeValue(args[i], maxLen));
           }
-          send({
+          const payload: Record<string, unknown> = {
             t: "probe_hit",
             id: decl.id,
             clazz: decl.module,
@@ -138,17 +142,28 @@ export function addNativeProbes(
             thread: Process.getCurrentThreadId(),
             native: true,
             args: enc,
-          });
+          };
+          if (decl.captureRet) {
+            const tid = Process.getCurrentThreadId();
+            const stack = pendingStacks.get(tid) ?? [];
+            stack.push(payload);
+            pendingStacks.set(tid, stack);
+          } else {
+            send(payload);
+          }
         },
         onLeave(retval) {
-          const st2 = nativeProbes.get(decl.id);
-          if (st2) {
-            /* 返回值留在 retval 编码增强（M2 后续） */
-            void st2;
+          if (!decl.captureRet) return;
+          const tid = Process.getCurrentThreadId();
+          const stack = pendingStacks.get(tid);
+          const payload = stack?.pop();
+          if (payload) {
+            payload.ret = encodeValue(retval, maxLen);
+            send(payload);
           }
-          void retval;
         },
       });
+      nativeListeners.set(decl.id, listener);
       results.push({ id: decl.id, status: "active", error: null });
     } catch (e) {
       st.status = "error";
@@ -160,10 +175,17 @@ export function addNativeProbes(
 }
 
 export function removeNativeProbes(ids: string[]): { removed: number } {
-  // Interceptor 的 listener 句柄管理：v1 用 revert 不适用（attach 需 listener 句柄），
-  // 记录为已移除并在探针表删除（M2 后续补 attach 返回句柄管理）。
   let removed = 0;
   for (const id of ids) {
+    const listener = nativeListeners.get(id);
+    if (listener) {
+      try {
+        listener.detach();
+      } catch {
+        /* 目标已卸载等场景：忽略，句柄照常清理 */
+      }
+      nativeListeners.delete(id);
+    }
     if (nativeProbes.delete(id)) removed++;
   }
   return { removed };

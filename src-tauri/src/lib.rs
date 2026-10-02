@@ -34,10 +34,12 @@ pub fn run() {
         .ok()
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| "python".into());
+    // 通道选择（文档10 P3-4）：preferred_channel 驱动 attach 分支，UI 明示当前通道
+    let preferred_channel = config::get().preferred_channel.clone();
 
     tauri::Builder::default()
         .manage(AppState::new())
-        .manage(services::session::FridaState::new(sidecar_python))
+        .manage(services::session::FridaState::new(sidecar_python, preferred_channel))
         .manage(services::terminal::TerminalMgr::default())
         .manage(services::recorder::RecorderState::default())
         .manage(services::trace::TraceState::default())
