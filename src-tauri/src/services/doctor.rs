@@ -143,7 +143,7 @@ async fn check_emulator(cfg: &AppConfig) -> CheckResult {
         "fail"
     };
     let fix = if status == "fail" {
-        Some("启动 MuMu 模拟器（本机安装于 D:\\System\\MuMu\\MuMuPlayer）；如端口不同，在设置中修改模拟器端口列表".into())
+        Some("启动模拟器（MuMu/已配置的模拟器）；如端口不同，在设置中修改模拟器端口列表".into())
     } else {
         None
     };

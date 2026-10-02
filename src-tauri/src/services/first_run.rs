@@ -97,15 +97,70 @@ pub async fn run() -> Result<FirstRunReport, String> {
         detail: port_detail,
     });
 
+    items.push(check_sidecar().await);
     let ok = items.iter().all(|i| i.ok);
     Ok(FirstRunReport { ok, items })
 }
 
-/// FR-02：bin\adb 三个文件的 sha256 与 binary_manifest.json 对账。
+/// FR-07 通道B sidecar（文档10 P4-1）：打包 exe 优先；python 回退需 frida 模块可导入。
+async fn check_sidecar() -> FirstRunItem {
+    let python = std::env::var("LOVELYFRIDA_PYTHON")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "python".into());
+    let launch = crate::paths::resolve_sidecar_launch(&python);
+    let exe_mode = !launch.program.ends_with(".py");
+    if exe_mode {
+        let ok = std::path::Path::new(&launch.program).is_file();
+        return FirstRunItem {
+            id: "FR-07".into(),
+            name: "通道B sidecar".into(),
+            ok,
+            detail: if ok {
+                format!("打包 exe 就绪：{}", launch.label)
+            } else {
+                format!("exe 不存在：{}", launch.program)
+            },
+        };
+    }
+    // python 源码模式（开发态）：验证 frida 模块可导入
+    let out = crate::backends::adb::run_raw(
+        std::path::Path::new(&python),
+        &["-c", "import frida; print(frida.__version__)"],
+        std::time::Duration::from_secs(30),
+    )
+    .await;
+    let (ok, detail) = match out {
+        Ok(o) if o.code == Some(0) && !o.stdout.trim().is_empty() => (
+            true,
+            format!(
+                "python 源码模式（开发回退，正式分发请构建 sidecar exe）：frida {}",
+                o.stdout.trim()
+            ),
+        ),
+        Ok(o) => (
+            false,
+            format!(
+                "frida 模块不可用：{} {}",
+                o.stdout.trim(),
+                o.stderr.trim()
+            ),
+        ),
+        Err(e) => (false, format!("python 执行失败：{e}")),
+    };
+    FirstRunItem {
+        id: "FR-07".into(),
+        name: "通道B sidecar".into(),
+        ok,
+        detail,
+    }
+}
+
+/// FR-02：bin\adb 三个文件的 sha256 与 binary_manifest.json 对账（资源定位走 resource_join）。
 async fn check_binary_hashes() -> FirstRunItem {
     use sha2::{Digest, Sha256};
-    let adb_dir = crate::paths::bin_dir().join("adb").join("windows-x64");
-    let manifest_path = crate::paths::bin_dir().join("binary_manifest.json");
+    let manifest_path = crate::paths::resource_join("bin/binary_manifest.json");
+    let bin_base = crate::paths::resource_join("bin");
 
     if !manifest_path.exists() {
         return FirstRunItem {
@@ -145,7 +200,7 @@ async fn check_binary_hashes() -> FirstRunItem {
         ) else {
             continue;
         };
-        let p = crate::paths::bin_dir().join(rel);
+        let p = bin_base.join(rel);
         if !p.exists() {
             mismatches.push(format!("{rel}：文件缺失"));
             continue;
@@ -159,7 +214,6 @@ async fn check_binary_hashes() -> FirstRunItem {
         }
         checked += 1;
     }
-    let _ = adb_dir; // 保留目录引用语义
     FirstRunItem {
         id: "FR-02".into(),
         name: "二进制清单对账".into(),

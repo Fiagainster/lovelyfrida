@@ -29,17 +29,19 @@ pub fn run() {
     }
     tracing::info!("LovelyFrida 启动，根目录 = {}", paths::app_root().display());
 
-    // 通道B sidecar 的 Python 解释器：环境变量 > PATH 上的 python
+    // 通道B sidecar 启动方式（文档10 P4-1）：打包 exe 优先，开发态回退 python 源码
     let sidecar_python = std::env::var("LOVELYFRIDA_PYTHON")
         .ok()
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| "python".into());
+    let sidecar_launch = paths::resolve_sidecar_launch(&sidecar_python);
+    tracing::info!("[通道B] sidecar 启动方式：{}", sidecar_launch.label);
     // 通道选择（文档10 P3-4）：preferred_channel 驱动 attach 分支，UI 明示当前通道
     let preferred_channel = config::get().preferred_channel.clone();
 
     tauri::Builder::default()
         .manage(AppState::new())
-        .manage(services::session::FridaState::new(sidecar_python, preferred_channel))
+        .manage(services::session::FridaState::new(sidecar_launch, preferred_channel))
         .manage(services::terminal::TerminalMgr::default())
         .manage(services::recorder::RecorderState::default())
         .manage(services::trace::TraceState::default())

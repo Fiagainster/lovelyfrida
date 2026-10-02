@@ -71,9 +71,9 @@ pub struct FridaState {
 }
 
 impl FridaState {
-    pub fn new(python: String, preferred_channel: String) -> Self {
+    pub fn new(launch: crate::paths::SidecarLaunch, preferred_channel: String) -> Self {
         Self {
-            channel: FridaChannelB::new(python),
+            channel: FridaChannelB::new(launch),
             channel_c: std::sync::Arc::new(crate::backends::frida_c::FridaChannelC::new()),
             preferred_channel,
             session: Mutex::new(SessionSnapshot::default()),

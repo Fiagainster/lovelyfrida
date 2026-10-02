@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "LovelyFrida",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "com.lovelyfrida.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -27,8 +27,19 @@
     }
   },
   "bundle": {
-    "active": false,
-    "targets": "all",
-    "icon": ["icons/icon.ico"]
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/icon.ico"],
+    "resources": [
+      "../bin/adb/windows-x64/adb.exe",
+      "../bin/adb/windows-x64/AdbWinApi.dll",
+      "../bin/adb/windows-x64/AdbWinUsbApi.dll",
+      "../bin/binary_manifest.json",
+      "../bin/frida-server/17.19.0/android-arm/frida-server",
+      "../bin/frida-server/17.19.0/android-arm64/frida-server",
+      "../bin/frida-server/17.19.0/android-x86/frida-server",
+      "../bin/frida-server/17.19.0/android-x86_64/frida-server",
+      "../sidecar/dist/frida_bridge.exe"
+    ]
   }
 }

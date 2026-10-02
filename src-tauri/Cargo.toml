@@ -1,6 +1,6 @@
 [package]
 name = "lovelyfrida"
-version = "0.1.0"
+version = "0.2.0"
 description = "GUI 化的 Frida 动态调试工具"
 edition = "2021"
 rust-version = "1.77"
@@ -38,8 +38,6 @@ portable-pty = "0.8"
 base64 = "0.22"
 md-5 = "0.10"
 sha1 = "0.10"
-hmac = "0.12"
-pbkdf2 = "0.12"
 hex = "0.4"
 
 [profile.release]

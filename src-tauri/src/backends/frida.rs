@@ -63,14 +63,14 @@ struct SidecarInner {
 #[derive(Clone)]
 pub struct FridaChannelB {
     inner: Arc<RwLock<Option<Arc<SidecarInner>>>>,
-    python: String,
+    launch: crate::paths::SidecarLaunch,
 }
 
 impl FridaChannelB {
-    pub fn new(python: String) -> Self {
+    pub fn new(launch: crate::paths::SidecarLaunch) -> Self {
         Self {
             inner: Arc::new(RwLock::new(None)),
-            python,
+            launch,
         }
     }
 
@@ -95,21 +95,24 @@ impl FridaChannelB {
                 return Ok(s.clone());
             }
         }
-        let s = spawn_sidecar(&self.python).await?;
+        let s = spawn_sidecar(&self.launch).await?;
         *self.inner.write().await = Some(s.clone());
-        tracing::info!("[通道B] sidecar 已启动（{}）", self.python);
+        tracing::info!("[通道B] sidecar 已启动（{}）", self.launch.label);
         Ok(s)
     }
 }
 
-async fn spawn_sidecar(python: &str) -> Result<Arc<SidecarInner>, String> {
-    let bridge = crate::paths::sidecar_bridge_path();
-    if !bridge.is_file() {
-        return Err(format!("sidecar 脚本缺失：{}", bridge.display()));
+async fn spawn_sidecar(launch: &crate::paths::SidecarLaunch) -> Result<Arc<SidecarInner>, String> {
+    // python 源码模式需校验脚本存在；exe 模式自包含无需校验
+    let python_mode = launch.program.ends_with(".py");
+    if python_mode {
+        let bridge = crate::paths::sidecar_bridge_path();
+        if !bridge.is_file() {
+            return Err(format!("sidecar 脚本缺失：{}", bridge.display()));
+        }
     }
-    let mut cmd = Command::new(python);
-    cmd.arg("-u")
-        .arg(bridge)
+    let mut cmd = Command::new(&launch.program);
+    cmd.args(&launch.args)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -119,7 +122,7 @@ async fn spawn_sidecar(python: &str) -> Result<Arc<SidecarInner>, String> {
 
     let mut child = cmd
         .spawn()
-        .map_err(|e| format!("启动 Python sidecar 失败（{python}）：{e}"))?;
+        .map_err(|e| format!("启动 sidecar 失败（{}）：{e}", launch.label))?;
     let stdin = child.stdin.take().ok_or("sidecar stdin 不可用")?;
     let stdout = child.stdout.take().ok_or("sidecar stdout 不可用")?;
     let stderr = child.stderr.take().ok_or("sidecar stderr 不可用")?;

@@ -2,7 +2,7 @@
 
 > 把 Frida 动态分析从「命令行的手艺」变成「看得见、可回放、能自证的工作台」。
 
-**当前状态：M0~M5 核心功能全部落地并真机验收（外壳/体检/只读保护 → frida 三通道/会话/终端/Recorder → agent 通用底座/探针/探索器/REPL/时间轴 → 回灌七步/实验台/差分矩阵 → 算法还原/爆破编排 → Evidence 台账/案卷包）。**
+**当前状态：M0~M5 核心全部落地并真机验收（外壳/体检/只读保护 → frida 三通道/会话/终端/Recorder → agent 通用底座/探针/探索器/REPL/时间轴 → 回灌七步/实验台/差分矩阵 → 算法还原/爆破编排 → Evidence 台账/案卷包）；完善计划四阶段全部完成（P0 真 bug 清零 + 安全纪律兑现 → 诊断引擎 48 条数据驱动 + 爆破掩码循环 + 落库迁移 → 通道C/视图零占位 → 单安装包分发）。**
 
 ---
 
@@ -71,6 +71,16 @@ cd src-tauri && cargo check
 - 配置在首次运行生成 `config.toml`（含 `[doctor]` 体检可配置段、只读根、frida 端口）。
 - 浏览器直开 vite（`npm run dev`）可做 UI 预览，Tauri 命令会返回明确的「预览模式不可用」。
 
+### 打包分发（单安装包，阶段④）
+
+```bash
+python scripts/build_sidecar.py   # ① 通道B sidecar exe（PyInstaller onefile，捆绑 frida 客户端）
+npx tauri build                   # ② NSIS 安装包（随包 adb / frida-server 四 ABI 矩阵 / sidecar exe）
+```
+
+产物：`src-tauri/target/release/bundle/nsis/LovelyFrida_0.2.0_x64-setup.exe`。
+安装后**零外部依赖**：adb 随包；frida-server 按设备 ABI 在运行时自动推送（S-01 版本矩阵一致）；通道B sidecar 为内置 exe（捆绑 Python + frida），开发态没有 exe 时自动回退 `python -u sidecar/frida_bridge.py`（需 `pip install frida`）。首启自检 FR-07 会明示当前 sidecar 启动方式。仅 frida 相关依赖在运行时由工具自行配置——这正是设计目标。
+
 ## 五、二进制供给（不入库）
 
 `bin/` 下的可执行文件不入 git，按 `bin/binary_manifest.json`（入库）登记的 sha256 供给与校验：
@@ -81,6 +91,8 @@ bin/frida-server/<版本>/android-{arm,arm64,x86,x86_64}/frida-server
 ```
 
 frida-server 从 [github.com/frida/frida/releases](https://github.com/frida/frida/releases) 下载，**版本必须与本机 frida 客户端一致**（S-01 三处一致）。首启自检（FR-02）按清单逐个校验 sha256。
+
+打包时这些二进制作为 tauri resources 全量随包（NSIS 对父目录资源落 `_up_\` 前缀目录，`paths::resource_join` 两级定位），安装目录即绿色布局。
 
 ## 六、文档地图
 

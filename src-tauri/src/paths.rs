@@ -59,17 +59,82 @@ pub fn bin_dir() -> PathBuf {
     app_root().join("bin")
 }
 
+/// 随包资源定位（文档10 P4-2 单安装包）：优先 app_root 直下（开发态/绿色布局）；
+/// NSIS 打包对 `../` 资源按 tauri-utils 规则落 `_up_\` 前缀目录，两级都查。
+pub fn resource_join(rel: &str) -> PathBuf {
+    let direct = app_root().join(rel);
+    if direct.exists() {
+        return direct;
+    }
+    let up = app_root().join("_up_").join(rel);
+    if up.exists() {
+        return up;
+    }
+    direct // 不存在时返回直连路径，让调用方给出明确的缺失报错
+}
+
 pub fn bundled_adb_path() -> PathBuf {
-    bin_dir().join("adb").join("windows-x64").join("adb.exe")
+    resource_join("bin/adb/windows-x64/adb.exe")
 }
 
 pub fn frida_server_matrix_dir() -> PathBuf {
-    bin_dir().join("frida-server")
+    resource_join("bin/frida-server")
 }
 
-/// 通道B sidecar 脚本（M5 打包时随 resources 分发）
+/// 打包态 sidecar 可执行（PyInstaller onefile，随 resources 分发）
+pub fn sidecar_exe_path() -> PathBuf {
+    resource_join("sidecar/frida_bridge.exe")
+}
+
+/// 通道B sidecar 脚本（开发态 python 直跑源码）
 pub fn sidecar_bridge_path() -> PathBuf {
     app_root().join("sidecar").join("frida_bridge.py")
+}
+
+/// sidecar 启动方式（文档10 P4-1：单安装包零外部依赖——exe 优先，开发态回退 python）
+#[derive(Debug, Clone)]
+pub struct SidecarLaunch {
+    pub program: String,
+    pub args: Vec<String>,
+    /// 供日志/UI 明示启动方式（打包 exe / 开发 python）
+    pub label: String,
+}
+
+/// 解析 sidecar 启动方式：
+/// ① env LOVELYFRIDA_SIDECAR（显式指定 exe）→ ② 安装目录 sidecar\frida_bridge.exe
+/// → ③ 开发产物 sidecar\dist\frida_bridge.exe → ④ 系统 python + 源码（需 pip install frida）
+pub fn resolve_sidecar_launch(python: &str) -> SidecarLaunch {
+    if let Ok(v) = std::env::var("LOVELYFRIDA_SIDECAR") {
+        let p = PathBuf::from(v.trim());
+        if p.is_file() {
+            return SidecarLaunch {
+                program: p.display().to_string(),
+                args: Vec::new(),
+                label: format!("sidecar exe（env 指定）：{}", p.display()),
+            };
+        }
+    }
+    let packaged = sidecar_exe_path();
+    if packaged.is_file() {
+        return SidecarLaunch {
+            program: packaged.display().to_string(),
+            args: Vec::new(),
+            label: format!("sidecar exe（随包）：{}", packaged.display()),
+        };
+    }
+    let dev_exe = app_root().join("sidecar").join("dist").join("frida_bridge.exe");
+    if dev_exe.is_file() {
+        return SidecarLaunch {
+            program: dev_exe.display().to_string(),
+            args: Vec::new(),
+            label: format!("sidecar exe（dist 产物）：{}", dev_exe.display()),
+        };
+    }
+    SidecarLaunch {
+        program: python.to_string(),
+        args: vec!["-u".into(), sidecar_bridge_path().display().to_string()],
+        label: format!("python 源码模式（开发回退）：{python} -u {}", sidecar_bridge_path().display()),
+    }
 }
 
 /// 工作区根（文档06：唯一可写区；config 可覆盖，默认 <root>/workspace）
