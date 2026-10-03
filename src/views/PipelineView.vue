@@ -29,6 +29,7 @@ import ProfileEditor from "@/components/ProfileEditor.vue";
 import { ref as vueRef } from "vue";
 import RestoreConsole from "@/components/RestoreConsole.vue";
 import LedgerConsole from "@/components/LedgerConsole.vue";
+import HistoryPanel from "@/components/HistoryPanel.vue";
 
 /** 主视图：流水线（M0 = 环境体检 + 设备连接两个节点可用） */
 const pipeline = usePipelineStore();
@@ -442,6 +443,7 @@ onMounted(() => {
         </div>
       </div>
       <LedgerConsole />
+      <HistoryPanel />
     </template>
 
     <!-- ============ 其余节点：里程碑占位 ============ -->

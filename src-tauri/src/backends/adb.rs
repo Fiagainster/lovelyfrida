@@ -287,14 +287,13 @@ impl AdbBackend {
         self.run(&["-s", serial, "shell", cmd], timeout).await
     }
 
-    #[allow(dead_code)] // M1 数据回灌启用
     pub async fn push(&self, serial: &str, local: &str, remote: &str, timeout: Duration) -> Result<ProcOutput, String> {
         self.run(&["-s", serial, "push", local, remote], timeout).await
     }
 
     /// 幂等清理：先清残留再建立（文档07：跑第二次就坏 = 不允许）。
     /// pkill -f 自匹配陷阱：模式写成 [f]xxx 使执行 shell 的命令行不命中自身。
-    #[allow(dead_code)] // M1 会话链路启用
+    /// A4b：安装链统一走这里（此前 session.rs 内联了同款命令）。
     pub async fn pkill_residue(&self, serial: &str, process_name: &str) -> Result<ProcOutput, String> {
         let head = process_name.chars().next().map(String::from).unwrap_or_default();
         let pattern = format!("[{head}]{}", &process_name[head.len()..]);
@@ -373,9 +372,47 @@ pub fn parse_devices(stdout: &str) -> Vec<AdbDevice> {
 }
 
 /// 扫描常见 MuMu 安装位置（含本机实际布局 D:\System\MuMu\MuMuPlayer\nx_main\adb.exe）。
-fn scan_mumu_adb() -> Vec<PathBuf> {
+/// 注册表定位 MuMu 安装目录（A4c：卸载项 InstallLocation，比盘符枚举准且快）。
+/// 键名覆盖 MuMu 12 常见安装标识；查不到时调用方回退盘符扫描。
+fn scan_mumu_registry() -> Vec<PathBuf> {
+    let keys = [
+        r"HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\MuMuPlayer-12.0",
+        r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\MuMuPlayer-12.0",
+        r"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\MuMuPlayer-12.0",
+        r"HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\MuMu Player",
+        r"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\MuMu Player",
+    ];
     let mut found = Vec::new();
-    let drives = ["C:", "D:", "E:"];
+    for key in keys {
+        let output = std::process::Command::new("reg")
+            .args(["query", key, "/v", "InstallLocation"])
+            .output();
+        let Ok(out) = output else { continue };
+        let text = String::from_utf8_lossy(&out.stdout);
+        for line in text.lines() {
+            let Some(idx) = line.find("REG_SZ") else { continue };
+            let dir = line[idx + "REG_SZ".len()..].trim().trim_matches('"');
+            if dir.is_empty() {
+                continue;
+            }
+            let base = std::path::PathBuf::from(dir);
+            for rel in ["shell/adb.exe", "nx_main/adb.exe", "adb.exe"] {
+                let cand = base.join(rel);
+                if cand.is_file() {
+                    found.push(cand);
+                }
+            }
+        }
+    }
+    found.sort();
+    found.dedup();
+    found
+}
+
+fn scan_mumu_adb() -> Vec<PathBuf> {
+    // ① 注册表优先（A4c）；② 盘符扫描兜底（绿色版覆盖不到注册表时），盘符扩到 C~G
+    let mut found = scan_mumu_registry();
+    let drives = ["C:", "D:", "E:", "F:", "G:"];
     let roots: Vec<PathBuf> = drives
         .iter()
         .flat_map(|d| {

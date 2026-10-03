@@ -44,3 +44,8 @@ hex = "0.4"
 lto = true
 strip = true
 codegen-units = 1
+
+# A5：测试构建开优化——debug 穷举单测（爆破 DFS/算法穷举）拖 11 分钟是纯浪费；
+# opt-level=2 后运行时提速 1~2 个数量级，测试编译时间换得值。
+[profile.test]
+opt-level = 2

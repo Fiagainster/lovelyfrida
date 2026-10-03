@@ -76,6 +76,7 @@ function onKeydown(e: KeyboardEvent) {
 }
 
 onMounted(() => {
+  diag.startActiveProbing();
   document.documentElement.setAttribute("data-theme", settings.theme);
   void settings.load();
   window.addEventListener("keydown", onKeydown);

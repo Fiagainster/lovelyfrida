@@ -24,6 +24,8 @@ export interface DiagContext {
   injection: InjectionReport | null;
   /** 信号文本池：session evidence / 消息流 / doctor evidence / probe lastError / matrix */
   signals: string[];
+  /** B1 主动探测发现（30s 巡检：session-drift 等），与被动信号分离 */
+  activeFindings: string[];
   /** active 且 hits=0 的探针 id → 首次观测时间（O-03 的 15s 判据） */
   zeroHitSince: Map<string, number>;
   /** waiting 态探针 id → 首次观测时间（P-05 的类加载时序判据） */
@@ -170,10 +172,12 @@ export const RULES: Rule[] = [
     id: "S-03",
     title: "frida-server 跑一会儿就断",
     severity: "warn",
-    cause: "server 是前台进程，adb shell 通道断开（窗口关闭）就被 SIGHUP 杀掉。",
+    cause: "server 是前台进程，adb shell 通道断开（窗口关闭）就被 SIGHUP 杀掉；或会话在无事件通知的情况下静默死亡（主动探测发现）。",
     fix: ["安装链已用 nohup 后台化启动", "断连后重新执行「安装并启动」（幂等，S-03）", "检查是否有别的工具在重启 adb server"],
     source: "docs/05 S-03 · 实战：关掉终端窗口 server 即死",
-    when: (c) => hasSignal(c, /"event":"detached"|connectionTerminated|device_lost/i),
+    when: (c) =>
+      hasSignal(c, /"event":"detached"|connectionTerminated|device_lost/i) ||
+      c.activeFindings.includes("session-drift"),
   },
   {
     id: "S-04",

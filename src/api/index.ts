@@ -277,6 +277,12 @@ export const api = {
   profileDelete: (id: number) => invoke<void>("profile_delete", { id }),
   dumpsList: () => invoke<{ name: string; size: number }[]>("dumps_list"),
 
+  // B2 落库数据面：历史查询
+  historySessions: (limit = 20) => invoke<HistorySession[]>("history_sessions", { limit }),
+  historyRuns: (limit = 20) => invoke<HistoryRun[]>("history_runs", { limit }),
+  historyExperiments: (limit = 20) => invoke<HistoryExperiment[]>("history_experiments", { limit }),
+  historyBruteJobs: (limit = 20) => invoke<HistoryBruteJob[]>("history_brute_jobs", { limit }),
+
   // M3：回灌 + 实验
   injectionRun: (package_: string, files: { localPath: string; deviceDir: string; deviceName: string }[]) =>
     invoke<InjectionReport>("injection_run", { package: package_, files }),
@@ -459,4 +465,47 @@ export interface ProfilePayload extends Record<string, unknown> {
 
 export interface AppProfileRow extends ProfilePayload {
   id: number;
+}
+
+// ---------- B2 落库数据面：历史行 ----------
+
+export interface HistorySession {
+  id: number;
+  case_name: string;
+  device_serial: string | null;
+  target: string;
+  channel: string;
+  state: string;
+  started_at: string;
+  ended_at: string;
+}
+
+export interface HistoryRun {
+  id: number;
+  session_id: number;
+  status: string;
+  trace_path: string;
+  line_count: number;
+  started_at: string;
+  ended_at: string;
+}
+
+export interface HistoryExperiment {
+  id: number;
+  case_name: string;
+  title: string;
+  status: string;
+  created_at: string;
+  report_bytes: number;
+}
+
+export interface HistoryBruteJob {
+  id: number;
+  case_name: string;
+  engine: string;
+  status: string;
+  hit_value: string;
+  candidates_total: number;
+  self_test_passed: boolean;
+  perf_note: string;
 }

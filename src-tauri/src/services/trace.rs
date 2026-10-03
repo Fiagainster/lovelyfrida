@@ -11,10 +11,6 @@ static SEQ: AtomicU64 = AtomicU64::new(0);
 
 pub struct RunState {
     pub id: String,
-    #[allow(dead_code)] // 时间轴头部展示
-    pub target: String,
-    #[allow(dead_code)] // 时间轴头部展示
-    pub started_at: String,
     file: Mutex<std::fs::File>,
     /// cases.db runs 行 id（P2-3；None=未落库，trace 文件照常写）
     pub db_run_id: Option<i64>,
@@ -38,7 +34,7 @@ pub struct TraceRecord {
 impl TraceState {
     /// 开启 trace run：打开 jsonl 文件 + 落 runs 行（P2-3，失败不阻断）。
     /// 注意：std Mutex 不得跨 await 持有——先快查、后重建锁插入。
-    pub async fn start(&self, target: &str, db_session_id: Option<i64>) -> String {
+    pub async fn start(&self, db_session_id: Option<i64>) -> String {
         {
             let run = self.run.lock().unwrap_or_else(|p| p.into_inner());
             if let Some(existing) = run.as_ref() {
@@ -77,8 +73,6 @@ impl TraceState {
             *run = Some(RunState {
                 id: id.clone(),
                 file: Mutex::new(f),
-                target: target.into(),
-                started_at: chrono::Local::now().format("%H:%M:%S%.3f").to_string(),
                 db_run_id,
                 lines: AtomicU64::new(0),
             });
@@ -99,14 +93,6 @@ impl TraceState {
         Some(run.id)
     }
 
-    #[allow(dead_code)] // M2 后续 run 索引使用
-    pub fn current_id(&self) -> Option<String> {
-        self.run
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .as_ref()
-            .map(|r| r.id.clone())
-    }
 }
 
 /// 事件入口：命中/错误/console 三类写入 trace；其余忽略。

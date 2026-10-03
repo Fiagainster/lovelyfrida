@@ -49,14 +49,10 @@ struct Pending {
 }
 
 struct SidecarInner {
-    #[allow(dead_code)] // M2 通道标签 UI 展示
     stdin: Mutex<mpsc::Sender<String>>,
     pending: Arc<Pending>,
     events_tx: broadcast::Sender<FridaEvent>,
     alive: Arc<AtomicBool>,
-    /// 通道标签（用于 UI 明示当前通道，禁止静默降级）
-    #[allow(dead_code)] // M2 通道标签 UI 展示
-    channel: String,
 }
 
 /// 通道B 句柄：懒启动；sidecar 意外退出后，下次调用自动重启（幂等，S-03）。
@@ -220,7 +216,6 @@ async fn spawn_sidecar(launch: &crate::paths::SidecarLaunch) -> Result<Arc<Sidec
         pending,
         events_tx,
         alive,
-        channel: "B".into(),
     }))
 }
 
@@ -252,14 +247,6 @@ impl SidecarInner {
     pub fn subscribe(&self) -> broadcast::Receiver<FridaEvent> {
         self.events_tx.subscribe()
     }
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[allow(dead_code)] // M2 类型化 hello 使用
-pub struct HelloInfo {
-    pub frida: String,
-    pub python: String,
-    pub bridge: String,
 }
 
 /// 附加 + 加载 core agent 的完整链（M1；会话状态机在 services/session.rs 之上组装）

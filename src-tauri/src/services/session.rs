@@ -259,11 +259,8 @@ pub async fn server_install(cfg: &AppConfig, frida: &FridaChannelB) -> Result<Ve
         format!("设备 ABI = {abi}"),
     ]));
 
-    // ② 清残留（幂等，S-03）
-    // pkill 自匹配陷阱：[f] 技巧让执行 shell 的命令行不命中自身
-    let kill = adb
-        .shell(&serial, "su -c 'pkill -f [f]rida-server; echo done'", Duration::from_secs(10))
-        .await;
+    // ② 清残留（幂等，S-03；[f] 自匹配技巧收敛在 adb.pkill_residue，A4b）
+    let kill = adb.pkill_residue(&serial, "frida-server").await;
     steps.push(step("清理残留", "pass", vec![format!(
         "pkill 已执行（{}）",
         kill.map(|o| o.stdout.trim().to_string()).unwrap_or_else(|e| e)
@@ -620,7 +617,7 @@ async fn wait_hello(
                                 let snap = s.clone();
                                 let _ = app.emit("session-state", snap.clone());
                                 let trace: State<std::sync::Arc<crate::services::trace::TraceState>> = app.state();
-                                trace.start(&snap.target.clone().unwrap_or_default(), snap.db_session_id).await;
+                                trace.start(snap.db_session_id).await;
                                 crate::audit::audit(
                                     "session_attach",
                                     snap.target.as_deref().unwrap_or(""),

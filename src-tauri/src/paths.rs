@@ -50,11 +50,6 @@ pub fn audit_log_path() -> PathBuf {
     logs_dir().join("audit.log")
 }
 
-#[allow(dead_code)] // M5 环形日志清理启用
-pub fn app_log_path() -> PathBuf {
-    logs_dir().join("app.log")
-}
-
 pub fn bin_dir() -> PathBuf {
     app_root().join("bin")
 }

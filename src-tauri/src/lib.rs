@@ -14,7 +14,7 @@ use std::time::Duration;
 use tauri::{Emitter, Manager, State};
 
 pub fn run() {
-    // 日志：logs/app.log（无轮转，M5 做环形清理）+ 开发期控制台
+    // 日志：logs/app.log 按天轮转（A4b：兑现 M5「环形清理」承诺为轮转语义）+ 开发期控制台
     init_logging();
 
     // 启动前置：目录布局 / 配置 / 数据库（失败不崩壳，记录错误供首启自检暴露）
@@ -85,6 +85,10 @@ pub fn run() {
             commands::frida_cmd::profile_list,
             commands::frida_cmd::profile_delete,
             commands::frida_cmd::dumps_list,
+            commands::frida_cmd::history_sessions,
+            commands::frida_cmd::history_runs,
+            commands::frida_cmd::history_experiments,
+            commands::frida_cmd::history_brute_jobs,
             commands::terminal_cmd::terminal_create,
             commands::terminal_cmd::terminal_write,
             commands::terminal_cmd::terminal_resize,
@@ -164,7 +168,7 @@ fn init_logging() {
     let _ = std::fs::create_dir_all(paths::logs_dir());
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,lovelyfrida_lib=debug"));
-    let file_appender = tracing_appender::rolling::never(paths::logs_dir(), "app.log");
+    let file_appender = tracing_appender::rolling::daily(paths::logs_dir(), "app.log");
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
     // guard 需要活到进程结束（worker 线程 flushing）
     std::mem::forget(guard);

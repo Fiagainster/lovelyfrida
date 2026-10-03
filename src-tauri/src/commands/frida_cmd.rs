@@ -498,3 +498,33 @@ pub async fn dumps_list() -> Result<Vec<serde_json::Value>, String> {
     .await
     .map_err(|e| format!("后台任务失败：{e}"))?
 }
+
+// ---------- B2 落库数据面（文档10）：历史查询 ----------
+
+#[tauri::command]
+pub async fn history_sessions(limit: Option<i64>) -> Result<Vec<crate::services::history::SessionRow>, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::services::history::list_sessions(limit.unwrap_or(20)))
+        .await
+        .map_err(|e| format!("后台任务失败：{e}"))?
+}
+
+#[tauri::command]
+pub async fn history_runs(limit: Option<i64>) -> Result<Vec<crate::services::history::RunRow>, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::services::history::list_runs(limit.unwrap_or(20)))
+        .await
+        .map_err(|e| format!("后台任务失败：{e}"))?
+}
+
+#[tauri::command]
+pub async fn history_experiments(limit: Option<i64>) -> Result<Vec<crate::services::history::ExperimentRow>, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::services::history::list_experiments(limit.unwrap_or(20)))
+        .await
+        .map_err(|e| format!("后台任务失败：{e}"))?
+}
+
+#[tauri::command]
+pub async fn history_brute_jobs(limit: Option<i64>) -> Result<Vec<crate::services::history::BruteJobRow>, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::services::history::list_brute_jobs(limit.unwrap_or(20)))
+        .await
+        .map_err(|e| format!("后台任务失败：{e}"))?
+}

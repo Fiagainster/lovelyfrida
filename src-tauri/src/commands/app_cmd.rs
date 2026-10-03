@@ -1,3 +1,4 @@
+use crate::state::AppState;
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -23,7 +24,11 @@ pub async fn get_app_info() -> Result<AppInfo, String> {
 
 /// 关闭握手第二步：前端确认后执行优雅关停（M1 起先 detach/清理子进程）。
 #[tauri::command]
-pub async fn confirm_close(app: tauri::AppHandle) -> Result<(), String> {
+pub async fn confirm_close(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    // 幂等门（A4b）：重复确认直接返回，避免二次关停审计/看门狗重臂
+    if state.is_shutting() {
+        return Ok(());
+    }
     crate::graceful_shutdown(&app);
     Ok(())
 }

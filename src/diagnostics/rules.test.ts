@@ -38,6 +38,7 @@ function ctx(over: Partial<DiagContext>): DiagContext {
     probes: [],
     injection: null,
     signals: [],
+    activeFindings: [],
     zeroHitSince: new Map(),
     waitingSince: new Map(),
     bruteSelfTestFailed: false,
