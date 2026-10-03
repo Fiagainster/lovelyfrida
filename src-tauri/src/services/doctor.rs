@@ -56,7 +56,7 @@ pub async fn run(cfg: &AppConfig, deep: bool) -> DoctorReport {
         check_root(&backend, &serial),
         check_selinux(&backend, &serial),
         check_abi(&backend, &serial),
-        check_version_matrix(&backend, &serial, &c7),
+        check_version_matrix(cfg, &backend, &serial, &c7),
         check_port(&backend, &serial, cfg.frida_port),
     );
     let checks = vec![c1, c2, c3, c4, c5, c6, c7, c8, c9, c10];
@@ -547,23 +547,38 @@ async fn check_frida_client() -> CheckResult {
     }
 }
 
-/// CHK-08 三处版本一致性（S-01）：客户端 vs bin 矩阵 vs 设备端。
+/// CHK-08 三处版本一致性（S-01）：客户端 vs 矩阵（bin 随包 + 工作区按需下载） vs 设备端。
 async fn check_version_matrix(
+    cfg: &AppConfig,
     backend: &Option<AdbBackend>,
     serial: &Option<String>,
     client_check: &CheckResult,
 ) -> CheckResult {
     let t0 = std::time::Instant::now();
-    let matrix = crate::paths::frida_server_matrix_dir();
-    let mut versions: Vec<String> = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&matrix) {
+    // C1：矩阵 = bin 随包 + workspace/frida-server（按需下载），合并去重展示
+    let mut bundled: Vec<String> = Vec::new();
+    let mut downloaded: Vec<String> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(crate::paths::frida_server_matrix_dir()) {
         for e in entries.flatten() {
             if e.path().is_dir() {
-                versions.push(e.file_name().to_string_lossy().to_string());
+                bundled.push(e.file_name().to_string_lossy().to_string());
             }
         }
     }
-    versions.sort();
+    let ws_matrix = crate::paths::workspace_root(cfg).join("frida-server");
+    if let Ok(entries) = std::fs::read_dir(&ws_matrix) {
+        for e in entries.flatten() {
+            if e.path().is_dir() {
+                let v = e.file_name().to_string_lossy().to_string();
+                if !bundled.contains(&v) {
+                    downloaded.push(v);
+                }
+            }
+        }
+    }
+    bundled.sort();
+    downloaded.sort();
+    let versions: Vec<String> = bundled.iter().chain(downloaded.iter()).cloned().collect();
     let client_version = client_check
         .evidence
         .first()
@@ -573,8 +588,14 @@ async fn check_version_matrix(
     let mut evidence: Vec<String> = vec![
         format!("① 客户端：{client_version}"),
         format!(
-            "② bin\\frida-server 矩阵：{}",
-            if versions.is_empty() { "空（M1 下载）".into() } else { versions.join(", ") }
+            "② 矩阵（bin 随包 + 工作区按需下载）：{}",
+            if versions.is_empty() { "空".into() } else {
+                let mut s = if bundled.is_empty() { "bin 空".to_string() } else { bundled.join(", ") };
+                if !downloaded.is_empty() {
+                    s.push_str(&format!("；工作区下载：{}", downloaded.join(", ")));
+                }
+                s
+            }
         ),
     ];
 
@@ -612,12 +633,12 @@ async fn check_version_matrix(
     } else if !matrix_has_client {
         (
             "warn",
-            Some(format!("bin\\frida-server 矩阵缺 {client_version}：M1 提供「推送匹配版」一键下载推送")),
+            Some(format!("矩阵缺 {client_version}：点体检页「下载 frida-server」按需获取（C1，sha256 对账后落工作区）")),
         )
     } else if !device_ok {
         (
             "warn",
-            Some("设备端尚未推送 frida-server：M1 会话链路将自动推送匹配版本".into()),
+            Some("设备端尚未推送 frida-server：会话链路将自动推送匹配版本".into()),
         )
     } else if let (Some(b), Some(s)) = (backend, serial) {
         // 设备端运行版本实测（阶段③：不再用 M1 占位文案）——server 同款探测

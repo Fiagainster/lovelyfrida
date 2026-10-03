@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted } from "vue";
+import { computed, defineAsyncComponent, onMounted, onUnmounted } from "vue";
 import {
   NConfigProvider,
   NModal,
@@ -24,11 +24,13 @@ import CommandPalette from "@/components/CommandPalette.vue";
 import SettingsModal from "@/components/SettingsModal.vue";
 import TerminalDrawer from "@/components/TerminalDrawer.vue";
 import PipelineView from "@/views/PipelineView.vue";
-import TimelineView from "@/views/TimelineView.vue";
-import DiffView from "@/views/DiffView.vue";
-import TopologyView from "@/views/TopologyView.vue";
-import TerminalView from "@/views/TerminalView.vue";
-import LedgerConsole from "@/components/LedgerConsole.vue";
+// 非默认视图异步加载：TimelineView（连带 NDataTable 的虚拟滚动机制）等重组件
+// 拆独立 chunk，首屏不为「可能永远不打开的视图」付包体
+const TimelineView = defineAsyncComponent(() => import("@/views/TimelineView.vue"));
+const DiffView = defineAsyncComponent(() => import("@/views/DiffView.vue"));
+const TopologyView = defineAsyncComponent(() => import("@/views/TopologyView.vue"));
+const TerminalView = defineAsyncComponent(() => import("@/views/TerminalView.vue"));
+const LedgerConsole = defineAsyncComponent(() => import("@/components/LedgerConsole.vue"));
 import PlaceholderView from "@/views/PlaceholderView.vue";
 
 const app = useAppStore();

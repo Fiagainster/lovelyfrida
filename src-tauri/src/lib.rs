@@ -58,6 +58,7 @@ pub fn run() {
             commands::guard_cmd::guard_check_write,
             commands::frida_cmd::frida_server_status,
             commands::frida_cmd::frida_server_install,
+            commands::frida_cmd::frida_server_fetch,
             commands::frida_cmd::frida_forward_setup,
             commands::frida_cmd::frida_processes,
             commands::frida_cmd::frida_session_attach,

@@ -12,6 +12,7 @@ import {
   EyeOutline,
   ConstructOutline,
   ArchiveOutline,
+  CloudDownloadOutline,
 } from "@vicons/ionicons5";
 import { usePipelineStore } from "@/stores/pipeline";
 import { useSettingsStore } from "@/stores/settings";
@@ -87,6 +88,34 @@ const connecting = ref(false);
 const lastConnect = ref<ConnectReport | null>(null);
 
 const connectNode = computed(() => pipeline.nodes[1]);
+
+// ---- C1：frida-server 按需下载（CHK-08 提示矩阵缺版本时出现） ----
+const fetchingServer = ref(false);
+const fridaMatrixNeedsFetch = computed(() =>
+  (pipeline.doctor?.checks ?? []).some((c) => c.id === "CHK-08" && c.status === "warn" && (c.fix ?? "").includes("按需获取")),
+);
+
+async function onFetchServer() {
+  fetchingServer.value = true;
+  try {
+    const r = await api.fridaServerFetch(null, null);
+    const ok = r.entries.filter((e) => !e.error).length;
+    const skipped = r.entries.filter((e) => e.skipped).length;
+    const failed = r.entries.filter((e) => e.error);
+    if (failed.length === 0) {
+      message.success(
+        `frida-server ${r.version}：${ok}/${r.entries.length} 个 ABI 就绪（${skipped} 个已存在跳过，${(r.elapsed_ms / 1000).toFixed(1)}s），已落工作区`,
+      );
+    } else {
+      message.warning(`frida-server ${r.version}：${ok}/${r.entries.length} 成功，失败：${failed.map((f) => `${f.abi}(${f.error})`).join("；")}`);
+    }
+    await pipeline.runDoctor(false);
+  } catch (e) {
+    message.error(String(e));
+  } finally {
+    fetchingServer.value = false;
+  }
+}
 
 async function refreshAdb() {
   try {
@@ -166,6 +195,18 @@ onMounted(() => {
           >
             <template #icon><RefreshOutline /></template>
             深度体检（连接重试）
+          </NButton>
+          <NButton
+            v-if="fridaMatrixNeedsFetch"
+            size="small"
+            secondary
+            type="info"
+            :loading="fetchingServer"
+            title="按 binary_manifest.json 登记的版本与 sha256 下载 frida-server 四 ABI 到工作区（C1，需网络）"
+            @click="onFetchServer"
+          >
+            <template #icon><CloudDownloadOutline /></template>
+            下载 frida-server
           </NButton>
         </div>
       </div>

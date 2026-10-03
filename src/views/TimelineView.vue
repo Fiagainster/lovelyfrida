@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
-import { NButton, NModal, NTag } from "naive-ui";
+import { computed, h, onMounted, ref } from "vue";
+import { NButton, NDataTable, NModal, NTag, type DataTableColumns } from "naive-ui";
 import { PauseOutline, PlayOutline, TrashOutline } from "@vicons/ionicons5";
 import { useProbeStore } from "@/stores/probe";
 import { useSessionStore } from "@/stores/session";
 import type { TraceRecord } from "@/api";
 
-/** 时间轴视图（文档03）：探针触发流，虚拟化表格 + 参数下钻 */
+/** 时间轴视图（文档03）：探针触发流，NDataTable 虚拟滚动（O-02：DOM 只渲染视口行）+ 参数下钻 */
 const probe = useProbeStore();
 const session = useSessionStore();
 
@@ -22,7 +22,7 @@ interface TimelineRow {
 }
 
 const liveRows = computed<TimelineRow[]>(() =>
-  probe.trace.slice(0, visibleCount.value).map((r: TraceRecord) => {
+  probe.trace.map((r: TraceRecord) => {
     const p = r.payload;
     const args = (p.args as { k: string; v: string }[] | undefined) ?? [];
     return {
@@ -38,13 +38,57 @@ const liveRows = computed<TimelineRow[]>(() =>
   }),
 );
 
-// 渐进加载（O-02）：DOM 只渲染前 N 条，「加载更多」扩窗；全量始终在内存环 + jsonl
-const visibleCount = ref(300);
-const hasMore = computed(() => probe.trace.length > visibleCount.value);
+// 真暂停：事件照常写入 probe.trace 环形缓冲（不丢数据），仅冻结本视图渲染
+const paused = ref(false);
+const frozenRows = ref<TimelineRow[]>([]);
 
-function loadMore() {
-  visibleCount.value += 500;
+function togglePause() {
+  if (!paused.value) frozenRows.value = liveRows.value;
+  paused.value = !paused.value;
 }
+
+const rows = computed(() => (paused.value ? frozenRows.value : liveRows.value));
+
+function kindChipClass(kind: string): string {
+  if (kind === "PROBE_HIT") return "status-chip--pass";
+  if (kind === "PROBE_ERROR" || kind === "TRACE_GAP") return "status-chip--fail";
+  return "status-chip--running";
+}
+
+// 虚拟滚动列（O-02 承诺兑现：此前是渐进窗口 + 普通 table，千级事件 diff 全量 vnode）
+const columns: DataTableColumns<TimelineRow> = [
+  {
+    title: "时间",
+    key: "wall",
+    width: 90,
+    render: (r) => h("span", { class: "mono", style: "font-size: 11px" }, r.wall),
+  },
+  {
+    title: "类型",
+    key: "kind",
+    width: 110,
+    render: (r) => h("span", { class: ["status-chip", kindChipClass(r.kind)] }, r.kind),
+  },
+  {
+    title: "目标",
+    key: "target",
+    width: 320,
+    ellipsis: { tooltip: true },
+    render: (r) => h("span", { class: "mono", style: "font-size: 12px" }, r.target),
+  },
+  {
+    title: "参数",
+    key: "args",
+    ellipsis: { tooltip: true },
+    render: (r) => h("span", { style: "font-size: 11px; color: var(--text-2)" }, argsSummary(r.args)),
+  },
+  {
+    title: "线程",
+    key: "thread",
+    width: 70,
+    render: (r) => h("span", { class: "mono", style: "font-size: 11px" }, String(r.thread)),
+  },
+];
 
 function download(name: string, content: string, mime: string) {
   const blob = new Blob([content], { type: mime });
@@ -91,18 +135,7 @@ function exportJson() {
   download(`timeline-${tsStamp()}.json`, JSON.stringify(probe.trace, null, 2), "application/json");
 }
 
-// 真暂停：事件照常写入 probe.trace 环形缓冲（不丢数据），仅冻结本视图渲染
-const paused = ref(false);
-const frozenRows = ref<TimelineRow[]>([]);
-
-function togglePause() {
-  if (!paused.value) frozenRows.value = liveRows.value;
-  paused.value = !paused.value;
-}
-
-const rows = computed(() => (paused.value ? frozenRows.value : liveRows.value));
-
-const detail = ref<(typeof rows.value)[number] | null>(null);
+const detail = ref<TimelineRow | null>(null);
 
 function argsSummary(args: { k: string; v: string }[]): string {
   return args.map((a) => `${a.k}:${a.v}`).join(" ｜ ").slice(0, 180);
@@ -142,42 +175,20 @@ onMounted(() => {
       </div>
     </div>
 
-    <table class="plain-table timeline-table">
-      <thead>
-        <tr>
-          <th style="width: 90px">时间</th>
-          <th style="width: 80px">类型</th>
-          <th>目标</th>
-          <th>参数</th>
-          <th style="width: 70px">线程</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="r in rows" :key="r.seq" style="cursor: pointer" @click="detail = r">
-          <td class="mono" style="font-size: 11px">{{ r.wall }}</td>
-          <td>
-            <span :class="['status-chip', r.kind === 'PROBE_HIT' ? 'status-chip--pass' : r.kind === 'PROBE_ERROR' ? 'status-chip--fail' : 'status-chip--running']">
-              {{ r.kind }}
-            </span>
-          </td>
-          <td class="mono" style="font-size: 12px">{{ r.target }}</td>
-          <td style="font-size: 11px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 520px">
-            {{ argsSummary(r.args) }}
-          </td>
-          <td class="mono" style="font-size: 11px">{{ r.thread }}</td>
-        </tr>
-        <tr v-if="rows.length === 0">
-          <td colspan="5" class="muted" style="padding: 20px; text-align: center">
-            暂无事件。挂探针并触发目标方法后，命中会实时出现在这里。
-          </td>
-        </tr>
-      </tbody>
-    </table>
-    <div v-if="hasMore" style="text-align: center; padding: 10px">
-      <NButton size="small" secondary @click="loadMore">
-        加载更多（已显示 {{ rows.length }} / {{ probe.trace.length }} 条）
-      </NButton>
-    </div>
+    <!-- 虚拟滚动：3000 条全量进 data，DOM 只渲染视口行（不再需要「加载更多」窗口） -->
+    <NDataTable
+      size="small"
+      :columns="columns"
+      :data="rows"
+      :row-key="(r: TimelineRow) => r.seq"
+      :row-props="(r: TimelineRow) => ({ style: 'cursor: pointer', onClick: () => (detail = r) })"
+      :max-height="'calc(100vh - 300px)'"
+      virtual-scroll
+    >
+      <template #empty>
+        <span class="muted" style="padding: 20px">暂无事件。挂探针并触发目标方法后，命中会实时出现在这里。</span>
+      </template>
+    </NDataTable>
 
     <!-- 下钻 modal -->
     <NModal
@@ -220,12 +231,3 @@ onMounted(() => {
     </NModal>
   </div>
 </template>
-
-<style>
-.timeline-table th {
-  position: sticky;
-  top: 0;
-  background: var(--bg-panel);
-  z-index: 1;
-}
-</style>

@@ -139,6 +139,13 @@ export interface ServerStatusReport {
   overall: CheckStatus;
 }
 
+/** frida-server 按需下载报告（C1：manifest 驱动 + sha256 对账后落工作区） */
+export interface ServerFetchReport {
+  version: string;
+  entries: { abi: string; path: string; size: number; skipped: boolean; error: string | null }[];
+  elapsed_ms: number;
+}
+
 export interface StepReport {
   name: string;
   status: "pass" | "warn" | "fail";
@@ -229,6 +236,8 @@ export const api = {
   // frida 会话（M1 通道B）
   fridaServerStatus: () => invoke<ServerStatusReport>("frida_server_status"),
   fridaServerInstall: () => invoke<StepReport[]>("frida_server_install"),
+  fridaServerFetch: (version?: string | null, abis?: string[] | null) =>
+    invoke<ServerFetchReport>("frida_server_fetch", { version: version ?? null, abis: abis ?? null }),
   fridaForwardSetup: () => invoke<StepReport>("frida_forward_setup"),
   fridaProcesses: () => invoke<ProcEntry[]>("frida_processes"),
   fridaSessionAttach: (target: number | string, caseName?: string) =>

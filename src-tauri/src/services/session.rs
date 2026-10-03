@@ -102,6 +102,23 @@ pub(crate) fn extend_ev(s: &mut SessionSnapshot, msgs: impl IntoIterator<Item = 
     }
 }
 
+/// frida-server 二进制定位：随包 bin/ 矩阵优先，工作区按需下载（C1）兜底
+pub fn find_server_binary(cfg: &AppConfig, version: &str, abi_dir: &str) -> Option<std::path::PathBuf> {
+    let bundled = crate::paths::frida_server_matrix_dir()
+        .join(version)
+        .join(format!("android-{abi_dir}"))
+        .join("frida-server");
+    if bundled.is_file() {
+        return Some(bundled);
+    }
+    let ws = crate::paths::workspace_root(cfg)
+        .join("frida-server")
+        .join(version)
+        .join(format!("android-{abi_dir}"))
+        .join("frida-server");
+    ws.is_file().then_some(ws)
+}
+
 fn abi_to_dirname(abi: &str) -> &str {
     match abi {
         "arm64-v8a" => "arm64",
@@ -266,15 +283,11 @@ pub async fn server_install(cfg: &AppConfig, frida: &FridaChannelB) -> Result<Ve
         .await?;
     let abi = abi_out.stdout.trim().to_string();
     let dirname = abi_to_dirname(&abi);
-    let local = crate::paths::frida_server_matrix_dir()
-        .join(&client_version)
-        .join(format!("android-{dirname}"))
-        .join("frida-server");
-    if !local.is_file() {
-        return Err(format!(
-            "bin\\frida-server\\{client_version}\\android-{dirname}\\frida-server 缺失（S-01 三处一致）：请下载放入后重试。设备 ABI={abi}"
-        ));
-    }
+    let local = find_server_binary(cfg, &client_version, dirname).ok_or_else(|| {
+        format!(
+            "frida-server {client_version}（android-{dirname}）在 bin 矩阵与工作区均缺失（S-01 三处一致）：体检页「下载 frida-server」可按需获取（C1）。设备 ABI={abi}"
+        )
+    })?;
     steps.push(step("版本匹配", "pass", vec![
         format!("客户端 {client_version} ↔ 矩阵 {} ({dirname})", client_version),
         format!("设备 ABI = {abi}"),

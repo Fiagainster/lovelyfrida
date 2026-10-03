@@ -266,6 +266,29 @@ pub async fn crypto_reconstruct(
     .map(Ok)?
 }
 
+/// frida-server 按需下载（C1）：version=None → sidecar 客户端版本（S-01 三处一致）；
+/// abis=None → manifest 登记的全部 ABI。sha256 对账通过才落 workspace/frida-server/。
+#[tauri::command]
+pub async fn frida_server_fetch(
+    state: tauri::State<'_, crate::services::session::FridaState>,
+    version: Option<String>,
+    abis: Option<Vec<String>>,
+) -> Result<crate::services::frida_fetch::FetchReport, String> {
+    let version = match version {
+        Some(v) if !v.trim().is_empty() => v,
+        _ => {
+            let hello = state.channel.call("hello", serde_json::json!({})).await?;
+            hello
+                .get("frida")
+                .and_then(|s| s.as_str())
+                .ok_or("sidecar 未返回 frida 版本（无法确定客户端版本）")?
+                .to_string()
+        }
+    };
+    let cfg = crate::config::get();
+    crate::services::frida_fetch::fetch(&cfg, version, abis).await
+}
+
 /// 爆破预估三件套（文档04-G）
 #[tauri::command]
 pub async fn brute_estimate(scheme: crate::services::crypto::Scheme, mask: String) -> Result<BruteEstimate, String> {
