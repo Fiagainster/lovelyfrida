@@ -89,7 +89,7 @@ impl AdbBackend {
             });
         }
         // PATH 解析为绝对路径（供 server 亲和匹配；`where adb` 首行）
-        if let Ok(o) = std::process::Command::new("where")
+        if let Ok(o) = quiet_std_command("where")
             .arg("adb")
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
@@ -303,6 +303,17 @@ impl AdbBackend {
 }
 
 /// 创建不弹控制台窗口的子进程命令（Windows 下 CREATE_NO_WINDOW）。
+/// 同步 std 命令的静默版（A4c 修复：reg query / where 之前裸 spawn，Windows 弹黑窗）
+pub fn quiet_std_command(program: &str) -> std::process::Command {
+    let mut cmd = std::process::Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    cmd
+}
+
 pub fn quiet_command(program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
     let mut cmd = tokio::process::Command::new(program);
     #[cfg(windows)]
@@ -384,7 +395,7 @@ fn scan_mumu_registry() -> Vec<PathBuf> {
     ];
     let mut found = Vec::new();
     for key in keys {
-        let output = std::process::Command::new("reg")
+        let output = quiet_std_command("reg")
             .args(["query", key, "/v", "InstallLocation"])
             .output();
         let Ok(out) = output else { continue };
