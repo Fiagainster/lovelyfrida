@@ -159,21 +159,28 @@ impl FridaChannelC {
                 *guard = None;
             });
         }
-        // stderr 泵：CLI/脚本报错 → console error 事件 + 日志
+        // stderr 泵：CLI/脚本报错 → 前端 + 日志（此前只进 broadcast——通道C 没有全局
+        // 转发者，hello 之后没人消费，报错永远到不了 UI）
         {
             let tx = self.events_tx.clone();
+            let app = app.clone();
             tokio::spawn(async move {
                 let reader = BufReader::new(stderr);
                 let mut lines = reader.lines();
                 while let Ok(Some(line)) = lines.next_line().await {
                     tracing::warn!("[通道C] {line}");
+                    let payload = json!({
+                        "t": "console", "level": "error",
+                        "args": [{ "k": "str", "v": line }]
+                    });
+                    let _ = app.emit(
+                        "frida-event",
+                        json!({"event": "message", "params": {"kind": "error", "payload": payload}}),
+                    );
                     let _ = tx.send(FridaEvent::Message {
                         script_id: VIRTUAL_SCRIPT_ID,
                         kind: "error".into(),
-                        payload: Some(json!({
-                            "t": "console", "level": "error",
-                            "args": [{ "k": "str", "v": line }]
-                        })),
+                        payload: Some(payload),
                         description: None,
                         stack: None,
                         data_b64: None,

@@ -190,6 +190,7 @@ async fn check_binary_hashes() -> FirstRunItem {
         .cloned()
         .unwrap_or_default();
     let mut mismatches: Vec<String> = Vec::new();
+    let mut ondemand_skipped: Vec<String> = Vec::new();
     let mut checked = 0usize;
     for f in &files {
         let (Some(rel), Some(expected)) = (
@@ -200,6 +201,12 @@ async fn check_binary_hashes() -> FirstRunItem {
         };
         let p = bin_base.join(rel);
         if !p.exists() {
+            // C1 按需模式（瘦身构建）：frida-server 未随包且矩阵目录整体缺失时，
+            // 缺文件是预期而非事故——不算对账失败，提示走按需下载
+            if rel.starts_with("frida-server/") && !crate::paths::frida_server_matrix_dir().exists() {
+                ondemand_skipped.push(rel.to_string());
+                continue;
+            }
             mismatches.push(format!("{rel}：文件缺失"));
             continue;
         }
@@ -217,7 +224,14 @@ async fn check_binary_hashes() -> FirstRunItem {
         name: "二进制清单对账".into(),
         ok: mismatches.is_empty() && checked > 0,
         detail: if mismatches.is_empty() {
-            format!("{checked} 个内置二进制 sha256 全部一致")
+            if ondemand_skipped.is_empty() {
+                format!("{checked} 个内置二进制 sha256 全部一致")
+            } else {
+                format!(
+                    "{checked} 个随包二进制 sha256 全部一致；{} 个 frida-server 未随包（按需下载模式，体检页可获取）",
+                    ondemand_skipped.len()
+                )
+            }
         } else {
             format!("不一致/缺失：{}", mismatches.join("；"))
         },

@@ -152,12 +152,12 @@ async function onReplRun() {
   }
 }
 
-// ---------- 探针状态轮询 ----------
+// ---------- 探针状态轮询（仅探针工作台 tab 可见时跑：deep/repl 下照跑是白花 IPC） ----------
 let timer: number | null = null;
 onMounted(() => {
-  if (session.session?.phase === "running") void probe.refreshStats();
+  if (session.session?.phase === "running" && tab.value === "probes") void probe.refreshStats();
   timer = window.setInterval(() => {
-    if (session.session?.phase === "running") void probe.refreshStats();
+    if (session.session?.phase === "running" && tab.value === "probes") void probe.refreshStats();
   }, 2500);
 });
 onUnmounted(() => {

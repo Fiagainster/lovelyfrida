@@ -158,16 +158,17 @@ pub struct ServerStatusReport {
 pub async fn server_status(cfg: &AppConfig, frida: &FridaChannelB) -> ServerStatusReport {
     let port = cfg.frida_port;
 
-    // ① 本机客户端（sidecar hello）
-    let (client_version, client_error) = match frida.call("hello", json!({})).await {
+    // 并行层1：sidecar hello 与 adb 探测互不依赖（此前 7 个串行 await，
+    // SessionConsole 每次刷新都是整条链跑一遍）
+    let (hello_res, adb_res) = tokio::join!(
+        frida.call("hello", json!({})),
+        AdbBackend::detect(&cfg.adb_path, &cfg.doctor.adb_extra_paths),
+    );
+    let (client_version, client_error) = match hello_res {
         Ok(v) => (v.get("frida").and_then(|s| s.as_str()).map(String::from), None),
         Err(e) => (None, Some(e)),
     };
-
-    // adb 现状
-    let adb = AdbBackend::detect(&cfg.adb_path, &cfg.doctor.adb_extra_paths)
-        .await
-        .ok();
+    let adb = adb_res.ok();
     let devices = match &adb {
         Some(a) => a.devices().await.unwrap_or_default(),
         None => Vec::new(),
@@ -180,28 +181,25 @@ pub async fn server_status(cfg: &AppConfig, frida: &FridaChannelB) -> ServerStat
     let mut forward_established: Option<bool> = None;
 
     if let (Some(a), Some(s)) = (&adb, &serial) {
-        // ② 设备端文件与版本
-        if let Ok(o) = a
-            .shell(s, "ls /data/local/tmp 2>/dev/null", Duration::from_secs(10))
-            .await
-        {
+        // 并行层2：设备端文件 / 版本 / 监听实测 / forward 登记（互不依赖）
+        let ls = a.shell(s, "ls /data/local/tmp 2>/dev/null", Duration::from_secs(10));
+        let ver = a.shell(
+            s,
+            "su -c '/data/local/tmp/frida-server --version' 2>/dev/null || echo unknown",
+            Duration::from_secs(15),
+        );
+        let ss = port_listening(a, s, port);
+        let fwd = a.run(&["forward", "--list"], Duration::from_secs(10));
+        let (ls, ver, ss, fwd) = tokio::join!(ls, ver, ss, fwd);
+        if let Ok(o) = ls {
             device_server_present = Some(o.stdout.contains("frida-server"));
         }
-        if let Ok(o) = a
-            .shell(
-                s,
-                "su -c '/data/local/tmp/frida-server --version' 2>/dev/null || echo unknown",
-                Duration::from_secs(15),
-            )
-            .await
-        {
+        if let Ok(o) = ver {
             let v = o.stdout.trim().trim_end_matches("unknown").trim();
             device_server_version = (!v.is_empty()).then(|| v.to_string());
         }
-        // ③ 运行状态：ss -tlnp 实测监听（S-05 假绿灯防护）
-        server_running = Some(port_listening(a, s, port).await);
-        // ④ forward
-        if let Ok(o) = a.run(&["forward", "--list"], Duration::from_secs(10)).await {
+        server_running = Some(ss);
+        if let Ok(o) = fwd {
             forward_established = Some(o.stdout.contains(&format!("tcp:{port}")));
         }
     }

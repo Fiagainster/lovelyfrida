@@ -80,6 +80,8 @@ python scripts/build_sidecar.py   # ① 通道B sidecar exe（PyInstaller onefil
 npx tauri build                   # ② NSIS 安装包（随包 adb / frida-server 四 ABI 矩阵 / sidecar exe）
 ```
 
+**瘦身构建（C1 可选）**：`npx tauri build --config src-tauri/tauri.slim.conf.json`——安装包不随包 frida-server 矩阵（约 250MB → ~40MB），首启后用体检页「下载 frida-server」按钮按 manifest 登记的 sha256 对账下载到工作区。代价是首启需要网络；默认构建仍保持「零外部依赖」。
+
 产物：`src-tauri/target/release/bundle/nsis/LovelyFrida_0.2.0_x64-setup.exe`。
 安装后**零外部依赖**：adb 随包；frida-server 按设备 ABI 在运行时自动推送（S-01 版本矩阵一致）；通道B sidecar 为内置 exe（捆绑 Python + frida），开发态没有 exe 时自动回退 `python -u sidecar/frida_bridge.py`（需 `pip install frida`）。首启自检 FR-07 会明示当前 sidecar 启动方式。仅 frida 相关依赖在运行时由工具自行配置——这正是设计目标。
 
