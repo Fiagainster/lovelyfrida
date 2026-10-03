@@ -311,14 +311,10 @@ onMounted(() => {
         </p>
       </div>
 
-      <!-- ============ 会话控制台（frida-server / forward / attach） ============ -->
-      <SessionConsole />
-
       <!-- ============ 操作记录（Recorder v1） ============ -->
       <RecorderCard />
     </template>
 
-    <!-- ============ 节点5：探针注入（M2） ============ -->
     <!-- ============ 节点3：应用装载（阶段③落地：frida 会话装载即此节点） ============ -->
     <template v-else-if="activeNode === 'load'">
       <div class="view-head">
@@ -332,7 +328,6 @@ onMounted(() => {
           </div>
         </div>
       </div>
-      <SessionConsole />
     </template>
 
     <template v-else-if="activeNode === 'probe'">
@@ -465,6 +460,11 @@ onMounted(() => {
         </span>
       </div>
     </template>
+
+    <!-- ============ 会话控制台（frida-server / forward / attach） ============
+         connect/load 两节点共享单实例：此前每节点各挂一个，切换节点即销毁重建，
+         每次重挂都重复拉 serverStatus/session 两轮 IPC（状态灯闪烁的来源） -->
+    <SessionConsole v-if="activeNode === 'connect' || activeNode === 'load'" />
   </div>
 </template>
 

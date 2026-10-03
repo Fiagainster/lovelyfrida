@@ -2,6 +2,8 @@
  * Native 层与内存能力（文档09 §memory；D3 边界：按符号/偏移挂导出函数 + 读内存）。
  */
 import { encodeValue, EncValue } from "./value";
+import { emitEvent } from "./batch";
+import { resolveExport } from "./extras";
 
 export interface ModuleRow {
   name: string;
@@ -49,7 +51,10 @@ export function scanMemory(
       ? Process.enumerateModules()
           .filter((m) => m.name === moduleName)
           .map((m) => ({ base: m.base, size: m.size }))
-      : Process.enumerateRanges("r--").map((r) => ({ base: r.base, size: r.size }));
+      : // 与 dumpDex 同口径：r-- + rw-（rw- 上的字符串/数据此前搜不到）
+        Process.enumerateRanges("r--")
+          .concat(Process.enumerateRanges("rw-"))
+          .map((r) => ({ base: r.base, size: r.size }));
   const matches: { address: string; size: number }[] = [];
   for (const r of ranges) {
     if (matches.length >= limit) break;
@@ -121,7 +126,11 @@ export function addNativeProbes(
         if (!m) throw new Error(`模块不存在：${decl.module}`);
         addr = m.base.add(decl.target);
       } else {
-        addr = (Module as unknown as { getExportByName: (m: string, e: string) => NativePointer }).getExportByName(decl.module, decl.target);
+        // frida 17 移除了静态 Module.getExportByName（此前硬转型调用旧 API → 17.x 必抛错），
+        // 统一走 extras 的跨版本解析：模块内实例方法 → 旧静态 → 全局兜底
+        const p = resolveExport(decl.module, decl.target);
+        if (!p) throw new Error(`导出符号未找到：${decl.module}!${decl.target}`);
+        addr = p;
       }
       const maxLen = decl.maxLen ?? 64;
       // captureRet：onEnter 暂存 payload（按线程栈，支持递归），onLeave 补 ret 后同事件发送（与 java.ts 一致）
@@ -149,7 +158,7 @@ export function addNativeProbes(
             stack.push(payload);
             pendingStacks.set(tid, stack);
           } else {
-            send(payload);
+            emitEvent(payload); // 高频路径走批量层（O-02）
           }
         },
         onLeave(retval) {
@@ -159,7 +168,7 @@ export function addNativeProbes(
           const payload = stack?.pop();
           if (payload) {
             payload.ret = encodeValue(retval, maxLen);
-            send(payload);
+            emitEvent(payload); // 与 onEnter 同一批量层（同事件带 ret 语义不变）
           }
         },
       });

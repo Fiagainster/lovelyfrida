@@ -34,12 +34,20 @@ pub struct TraceRecord {
 impl TraceState {
     /// 开启 trace run：打开 jsonl 文件 + 落 runs 行（P2-3，失败不阻断）。
     /// 注意：std Mutex 不得跨 await 持有——先快查、后重建锁插入。
+    /// 已有未关闭的旧 run（attach 未 detach 就换了目标）先落 "superseded" 收尾再开新 run，
+    /// 否则新会话的事件全部追加进旧 run 的 jsonl，runs.line_count 记在旧行上。
     pub async fn start(&self, db_session_id: Option<i64>) -> String {
-        {
-            let run = self.run.lock().unwrap_or_else(|p| p.into_inner());
-            if let Some(existing) = run.as_ref() {
-                return existing.id.clone();
-            }
+        // take 出旧 run 并立即还锁（MutexGuard 临时值不得跨 await）
+        let stale = self.run.lock().unwrap_or_else(|p| p.into_inner()).take();
+        if let Some(stale) = stale {
+            let lines = stale.lines.load(Ordering::SeqCst);
+            let db_run_id = stale.db_run_id;
+            let ended = chrono::Local::now().to_rfc3339();
+            let _ = tauri::async_runtime::spawn_blocking(move || {
+                crate::store::run_finish(db_run_id, lines, "superseded", &ended)
+            })
+            .await;
+            tracing::warn!("[trace] 旧 run {} 未关闭即开新 run：旧 run 已按 superseded 收尾", stale.id);
         }
         let id = chrono::Local::now().format("%Y%m%d-%H%M%S%.3f").to_string();
         let dir = {
@@ -95,7 +103,36 @@ impl TraceState {
 
 }
 
-/// 事件入口：命中/错误/console 三类写入 trace；其余忽略。
+/// 单条记录：构建 + jsonl 落盘（一行一次 write，保留「行式追加，崩溃安全」语义）。
+/// 只接受六类结构化观测事件；返回 None = 不属于 trace 范围。
+fn write_record(run: &RunState, payload: &Value) -> Option<TraceRecord> {
+    let t = payload.get("t").and_then(|v| v.as_str()).unwrap_or("");
+    if !matches!(
+        t,
+        "probe_hit" | "probe_error" | "console" | "dlopen" | "register_natives" | "ssl_data"
+    ) {
+        return None;
+    }
+    let seq = SEQ.fetch_add(1, Ordering::SeqCst);
+    let rec = TraceRecord {
+        seq,
+        wall: chrono::Local::now().format("%H:%M:%S%.3f").to_string(),
+        run_id: run.id.clone(),
+        payload: payload.clone(),
+    };
+    if let Ok(mut f) = run.file.lock() {
+        use std::io::Write;
+        if let Ok(line) = serde_json::to_string(&rec) {
+            if writeln!(f, "{line}").is_ok() {
+                run.lines.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+    }
+    Some(rec)
+}
+
+/// 事件入口：probe_hit / probe_error / console / dlopen / register_natives / ssl_data
+/// 写入 trace；dex_dump 走内存 dex 落盘；batch（agent 批量层）逐条落盘后单次批量 emit。
 pub fn on_agent_message(
     app: &tauri::AppHandle,
     trace: &TraceState,
@@ -132,33 +169,60 @@ pub fn on_agent_message(
         });
         return;
     }
-    // dlopen / register_natives / ssl_data 进时间轴（结构化观测）
-    if matches!(t, "dlopen" | "register_natives" | "ssl_data") {
-        let guard = trace.run.lock().unwrap_or_else(|p| p.into_inner());
-        if let Some(run) = guard.as_ref() {
-            let seq = SEQ.fetch_add(1, Ordering::SeqCst);
-            let rec = TraceRecord {
-                seq,
-                wall: chrono::Local::now().format("%H:%M:%S%.3f").to_string(),
-                run_id: run.id.clone(),
-                payload: payload.clone(),
-            };
-            if let Ok(mut f) = run.file.lock() {
-                use std::io::Write;
-                if let Ok(line) = serde_json::to_string(&rec) {
-                    if writeln!(f, "{line}").is_ok() {
-                        run.lines.fetch_add(1, Ordering::SeqCst);
+    // agent 批量层（O-02）：{t:"batch", items:[...]} —— 证据粒度不变（逐条落盘），
+    // 但 IPC/序列化次数从「每事件一次」降到「每批次一次」
+    if t == "batch" {
+        if let Some(items) = payload.get("items").and_then(|v| v.as_array()) {
+            // 批量层设计上不含 dex_dump（data 参数通道不可批量）；保险起见走单条入口
+            for item in items {
+                if item.get("t").and_then(|v| v.as_str()) == Some("dex_dump") {
+                    on_agent_message(app, trace, item, script_id, &None);
+                }
+            }
+            let mut records: Vec<TraceRecord> = Vec::new();
+            let guard = trace.run.lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(run) = guard.as_ref() {
+                for item in items {
+                    if item.get("t").and_then(|v| v.as_str()) == Some("dex_dump") {
+                        continue;
+                    }
+                    if let Some(rec) = write_record(run, item) {
+                        if item.get("t").and_then(|v| v.as_str()) == Some("probe_error") {
+                            let id = item.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+                            let err = item.get("error").and_then(|v| v.as_str()).unwrap_or("");
+                            crate::audit::audit("probe_error", id, "warn", "probe-lab", err);
+                        }
+                        records.push(rec);
                     }
                 }
             }
             drop(guard);
-            let _ = app.emit("trace-event", rec);
+            if !records.is_empty() {
+                let _ = app.emit(
+                    "trace-event",
+                    serde_json::json!({"t": "trace_batch", "records": records}),
+                );
+            }
         }
         return;
     }
-    if !matches!(t, "probe_hit" | "probe_error" | "console") {
-        return;
+    let guard = trace.run.lock().unwrap_or_else(|p| p.into_inner());
+    let Some(run) = guard.as_ref() else { return };
+    let Some(rec) = write_record(run, payload) else { return };
+    drop(guard);
+    let _ = app.emit("trace-event", rec);
+    if t == "probe_error" {
+        let id = payload.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+        let err = payload.get("error").and_then(|v| v.as_str()).unwrap_or("");
+        crate::audit::audit("probe_error", id, "warn", "probe-lab", err);
     }
+    let _ = script_id;
+}
+
+/// Lagged 丢弃留痕：broadcast 积压丢弃发生在消费端（trace 落盘之前），被丢的
+/// 事件永远到不了 jsonl。补一条 gap 记录，让证据文件能解释行号空洞（取证可审计），
+/// 同时推前端时间轴显式提示。
+pub fn on_gap(app: &tauri::AppHandle, trace: &TraceState, lost: u64) {
     let guard = trace.run.lock().unwrap_or_else(|p| p.into_inner());
     let Some(run) = guard.as_ref() else { return };
     let seq = SEQ.fetch_add(1, Ordering::SeqCst);
@@ -166,7 +230,7 @@ pub fn on_agent_message(
         seq,
         wall: chrono::Local::now().format("%H:%M:%S%.3f").to_string(),
         run_id: run.id.clone(),
-        payload: payload.clone(),
+        payload: serde_json::json!({"t": "trace_gap", "lost": lost, "note": "broadcast 积压丢弃，事件未能落盘"}),
     };
     if let Ok(mut f) = run.file.lock() {
         use std::io::Write;
@@ -178,10 +242,4 @@ pub fn on_agent_message(
     }
     drop(guard);
     let _ = app.emit("trace-event", rec);
-    if t == "probe_error" {
-        let id = payload.get("id").and_then(|v| v.as_str()).unwrap_or("?");
-        let err = payload.get("error").and_then(|v| v.as_str()).unwrap_or("");
-        crate::audit::audit("probe_error", id, "warn", "probe-lab", err);
-    }
-    let _ = script_id;
 }

@@ -44,7 +44,6 @@ pub fn run() {
         .manage(services::session::FridaState::new(sidecar_launch, preferred_channel))
         .manage(services::terminal::TerminalMgr::default())
         .manage(services::recorder::RecorderState::default())
-        .manage(services::trace::TraceState::default())
         .invoke_handler(tauri::generate_handler![
             commands::app_cmd::get_app_info,
             commands::app_cmd::confirm_close,
@@ -157,8 +156,23 @@ pub fn graceful_shutdown(app: &tauri::AppHandle) {
     state
         .shutdown_phase
         .store(state::SHUTDOWN_SHUTTING, Ordering::SeqCst);
-    // M1：在此先 detach frida 会话、停止 frida-server/sidecar/PTY 子进程，限时清理
-    audit::audit("shutdown", "app", "done", "close-handshake", "优雅关停");
+    audit::audit("shutdown", "app", "done", "close-handshake", "优雅关停：限时清理");
+    // 兑现 M1 注释承诺（此前是空壳：直接 exit(0)，设备会话与 PTY 均不收尾）。
+    // 每步各自带超时——卡死的子进程不拖住退出：
+    // ① frida 会话分离（unload agent + detach + trace 落盘收尾 + 落库收尾）；
+    // ② PTY 终端逐个关闭（杀 adb shell 子进程）。
+    // sidecar/adb 客户端进程由 kill_on_drop + 进程退出兜底；设备端 frida-server 保留
+    // （取证工具不假设下一次连接环境，设备侧状态由会话链路自行探测/拉起）。
+    let handle = app.clone();
+    tauri::async_runtime::block_on(async move {
+        let frida = handle.state::<services::session::FridaState>();
+        let _ = tokio::time::timeout(Duration::from_secs(4), services::session::detach(&handle, &frida)).await;
+        let term = handle.state::<services::terminal::TerminalMgr>();
+        let ids: Vec<u32> = term.sessions.lock().await.keys().copied().collect();
+        for id in ids {
+            let _ = tokio::time::timeout(Duration::from_secs(2), services::terminal::close(handle.clone(), &term, id)).await;
+        }
+    });
     let _ = app.exit(0);
 }
 

@@ -8,6 +8,8 @@ export const useTerminalStore = defineStore("terminal", () => {
   const activeId = ref<number | null>(null);
   const drawerOpen = ref(false);
   const lastSerial = ref("127.0.0.1:16384");
+  // bindEvents 重入门（dev HMR 重跑 setup 会重复注册 Tauri 监听）
+  let bound = false;
 
   // id → 前端 xterm 数据回调（组件挂载时注册）
   const dataHandlers = new Map<number, (b64: string) => void>();
@@ -20,21 +22,67 @@ export const useTerminalStore = defineStore("terminal", () => {
     closedHandlers.set(id, cb);
   }
 
-  async function bindEvents(listen: typeof import("@tauri-apps/api/event").listen) {
-    await listen<{ id: number; b64: string }>("terminal-out", (e) => {
-      dataHandlers.get(e.payload.id)?.(e.payload.b64);
-    });
-    await listen<{ id: number }>("terminal-closed", (e) => {
-      const id = e.payload.id;
-      sessions.value = sessions.value.filter((s) => s.id !== id);
-      closedHandlers.get(id)?.();
-      dataHandlers.delete(id);
-      closedHandlers.delete(id);
-      if (activeId.value === id) {
-        activeId.value = sessions.value[0]?.id ?? null;
-        if (!activeId.value) drawerOpen.value = false;
-      }
-    });
+  // 输出合流（O-02）：PTY 按 8KB 块逐条 emit，cat 大文件/logcat 时每块一次
+  // xterm.write；这里按 id 攒 16ms 内到达的块合并为一次 write（低于一帧，无感延迟）
+  const pendingOut = new Map<number, string[]>();
+  const outTimers = new Map<number, ReturnType<typeof setTimeout>>();
+
+  function flushOut(id: number) {
+    const t = outTimers.get(id);
+    if (t !== undefined) {
+      clearTimeout(t);
+      outTimers.delete(id);
+    }
+    const list = pendingOut.get(id);
+    pendingOut.delete(id);
+    if (list?.length) dataHandlers.get(id)?.(list.join(""));
+  }
+
+  function pushOut(id: number, b64: string) {
+    let list = pendingOut.get(id);
+    if (!list) {
+      list = [];
+      pendingOut.set(id, list);
+    }
+    list.push(b64);
+    if (list.length >= 32) {
+      flushOut(id); // 洪峰：攒够立即合并
+      return;
+    }
+    if (!outTimers.has(id)) {
+      outTimers.set(id, setTimeout(() => flushOut(id), 16));
+    }
+  }
+
+  async function bindEvents(listen: typeof import("@tauri-apps/api/event").listen): Promise<() => void> {
+    if (bound) return () => {};
+    bound = true;
+    const unlisten: Array<() => void> = [];
+    unlisten.push(
+      await listen<{ id: number; b64: string }>("terminal-out", (e) => {
+        if (!dataHandlers.has(e.payload.id)) return; // 无人订阅时不必攒缓冲
+        pushOut(e.payload.id, e.payload.b64);
+      }),
+    );
+    unlisten.push(
+      await listen<{ id: number }>("terminal-closed", (e) => {
+        const id = e.payload.id;
+        flushOut(id); // 先把攒着的尾部输出写完再清理
+        sessions.value = sessions.value.filter((s) => s.id !== id);
+        closedHandlers.get(id)?.();
+        dataHandlers.delete(id);
+        closedHandlers.delete(id);
+        pendingOut.delete(id);
+        if (activeId.value === id) {
+          activeId.value = sessions.value[0]?.id ?? null;
+          if (!activeId.value) drawerOpen.value = false;
+        }
+      }),
+    );
+    return () => {
+      bound = false;
+      while (unlisten.length) unlisten.pop()?.();
+    };
   }
 
   async function create(serial: string) {

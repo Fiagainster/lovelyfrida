@@ -50,6 +50,14 @@ export const useDiagStore = defineStore("diag", () => {
         waitingSince.delete(p.id);
       }
     }
+    // 已卸载探针的条目清掉（此前只在状态翻转时 delete，removeProbe 后 id 永久残留）
+    const currentIds = new Set(probe.probes.map((p) => p.id));
+    for (const id of [...zeroHitSince.keys()]) {
+      if (!currentIds.has(id)) zeroHitSince.delete(id);
+    }
+    for (const id of [...waitingSince.keys()]) {
+      if (!currentIds.has(id)) waitingSince.delete(id);
+    }
 
     // 信号文本池：被动匹配（正则）的原料
     const signals: string[] = [];

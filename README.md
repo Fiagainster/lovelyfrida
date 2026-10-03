@@ -67,6 +67,8 @@ npm run build         # vue-tsc + vite 生产构建
 cd src-tauri && cargo check
 ```
 
+- **首次克隆后先构建 agent**（`cd agent && npm install && npm run build`）：`agent/dist/core.js` 是 gitignore 的本地构建产物，Rust 侧 `include_str!` 编译期依赖它（CI 已按此顺序固化）。
+
 - 端口被 WinNAT 间歇保留（EACCES）时 `dev.mjs` 会自动换端口，无需手动处理。
 - 配置在首次运行生成 `config.toml`（含 `[doctor]` 体检可配置段、只读根、frida 端口）。
 - 浏览器直开 vite（`npm run dev`）可做 UI 预览，Tauri 命令会返回明确的「预览模式不可用」。

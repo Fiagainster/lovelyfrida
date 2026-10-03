@@ -1,7 +1,7 @@
 //! 爆破编排（文档04-G / U5）：掩码空间展开 + 预估三件套（总数/速率/ETA）
 //! + hashcat 命令生成（有 mode）+ C 专用爆破器骨架生成（无 mode，链式轮优化 +
 //! ★强制自测桩）+ 内置 Rust 爆破（小空间直接跑；自测不过不许全量）。
-use crate::services::crypto::{recompute, Sample, Scheme};
+use crate::services::crypto::{parse_concat, recompute, scheme_salt_bytes, Concat, Sample, Scheme};
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
@@ -110,7 +110,8 @@ pub fn run_builtin(
     }
 
     let sets = expand_mask(mask);
-    let total: u64 = sets.iter().map(|s| s.len() as u64).product();
+    // 非饱和 product 在 ?a×11 位时会溢出（debug panic / release 回绕）
+    let total: u64 = sets.iter().fold(1u64, |acc, s| acc.saturating_mul(s.len() as u64));
     let t0 = std::time::Instant::now();
     let mut tried: u64 = 0;
     let mut hit: Option<String> = None;
@@ -193,7 +194,7 @@ pub fn generate_c_skeleton(scheme: &Scheme, sample: &Sample, mask: &str) -> Stri
     // 掩码展开 → 每位字符集（与内置爆破同一套 token 语义）
     let sets = expand_mask(mask);
     let positions = sets.len();
-    let total: u64 = sets.iter().map(|s| s.len() as u64).product();
+    let total: u64 = sets.iter().fold(1u64, |acc, s| acc.saturating_mul(s.len() as u64));
     // 字符集用数值字节数组，规避 C 字符串 \x 转义的「贪心吞位」与引号转义问题
     let set_decls: String = sets
         .iter()
@@ -206,8 +207,46 @@ pub fn generate_c_skeleton(scheme: &Scheme, sample: &Sample, mask: &str) -> Stri
         .join("\n");
     let set_refs: String = (0..positions).map(|i| format!("SET_{i}")).collect::<Vec<_>>().join(", ");
     let set_lens: String = sets.iter().map(|s| format!("{}", s.len())).collect::<Vec<_>>().join(", ");
-    let salt_b = sample.salt.as_bytes().to_vec();
+    // 盐字节按方案 salt_form 语义展开（与 Rust recompute 同源；此前恒取原文导致
+    // B64Decoded/HexText 方案的骨架自测必挂），同样走数值字节数组
+    let salt_b = scheme_salt_bytes(scheme, &sample.salt);
     let salt_bytes: Vec<String> = salt_b.iter().map(|b| format!("0x{b:02x}")).collect();
+    // 拼接顺序此前硬编码 pwd‖salt，盐‖明文/仅明文方案生成的骨架必然自测失败
+    let concat_kind = parse_concat(&scheme.concat).unwrap_or(Concat::PwSalt);
+    let uses_salt = concat_kind != Concat::PwOnly && !salt_b.is_empty();
+    let salt_decl = if uses_salt {
+        format!(
+            "static const unsigned char SALT[] = {{{}}};   /* 盐字节（{}，{} 字节） */",
+            salt_bytes.join(","),
+            scheme.salt_form,
+            salt_b.len()
+        )
+    } else {
+        "/* 无盐（仅明文，或盐解码为空）：输入 = 候选本身 */".to_string()
+    };
+    // 首轮输入组装（与 crypto::first_input 同源）
+    let concat_body = if uses_salt {
+        match concat_kind {
+            Concat::SaltPw => r#"    if (pwdlen + sizeof(SALT) > sizeof(buf)) return; /* 候选+盐超缓冲：放弃该候选 */
+    memcpy(buf, SALT, sizeof(SALT));
+    memcpy(buf + sizeof(SALT), pwd, pwdlen);
+    off = pwdlen + sizeof(SALT);"#,
+            _ => r#"    if (pwdlen + sizeof(SALT) > sizeof(buf)) return; /* 候选+盐超缓冲：放弃该候选 */
+    memcpy(buf, pwd, pwdlen);
+    memcpy(buf + pwdlen, SALT, sizeof(SALT));
+    off = pwdlen + sizeof(SALT);"#,
+        }
+    } else {
+        "    if (pwdlen > sizeof(buf)) return; /* 候选超缓冲：放弃该候选 */\n    memcpy(buf, pwd, pwdlen);\n    off = pwdlen;"
+    };
+    // 自测明文同样字节化（用户口令可能含引号/反斜杠/非 ASCII，落 C 字符串必出转义事故）
+    let selftest_bytes: Vec<String> = sample.plaintext.as_bytes().iter().map(|b| format!("0x{b:02x}")).collect();
+    let selftest_decl = if selftest_bytes.is_empty() {
+        "static const unsigned char SELFTEST_PWD[] = {0};".to_string()
+    } else {
+        format!("static const unsigned char SELFTEST_PWD[] = {{{}}};", selftest_bytes.join(","))
+    };
+    let selftest_len = sample.plaintext.as_bytes().len();
 
     // 链式轮：hex 链输入是 2×摘要长的 hex 串；原始链输入直接用摘要（经 tmp 防止 in==out 别名）
     let chain_loop = if iter > 1 && chain_hex {
@@ -259,9 +298,10 @@ pub fn generate_c_skeleton(scheme: &Scheme, sample: &Sample, mask: &str) -> Stri
 #define DIGEST_LEN {digest_len}
 #define POSITIONS {positions}
 #define TOTAL_SPACE {total}ULL
-static const unsigned char SALT[] = {{{salt_bytes}}};   /* 盐原始字节（{salt_form}） */
+{salt_decl}
 static const char TARGET[] = "{target_hex}";
-static const char SELFTEST_PWD[] = "{selftest_pwd}";
+{selftest_decl}
+#define SELFTEST_LEN {selftest_len}u   /* 自测明文字节数（字节数组不落 NUL，长度显式给出） */
 
 {set_decls}
 static const char *SETS[POSITIONS] = {{{set_refs}}};
@@ -270,9 +310,7 @@ static const int SET_LEN[POSITIONS] = {{{set_lens}}};
 static void sha_chain(const unsigned char *pwd, size_t pwdlen, unsigned char out[DIGEST_LEN]) {{
     unsigned char buf[512];
     size_t off = 0;
-    if (pwdlen + sizeof(SALT) > sizeof(buf)) return; /* 候选+盐超缓冲：直接放弃该候选 */
-    memcpy(buf, pwd, pwdlen); off += pwdlen;
-    memcpy(buf + off, SALT, sizeof(SALT)); off += sizeof(SALT);
+{concat_body}
     {hash_fn}(buf, off, out);   /* 首轮：{first} */
 {chain_loop}
 }}
@@ -288,7 +326,7 @@ int main(void) {{
     /* ★ 强制自测桩（C-07）：用已知明文验证整条链 */
     unsigned char out[DIGEST_LEN];
     char hexout[DIGEST_LEN * 2 + 1];
-    sha_chain((const unsigned char *)SELFTEST_PWD, sizeof(SELFTEST_PWD) - 1, out);
+    sha_chain(SELFTEST_PWD, SELFTEST_LEN, out);
     hexify(out, hexout);
     if (strcmp(hexout, TARGET) != 0) {{
         fprintf(stderr, "★自测失败：got %s want %s —— 拒绝全量跑\n", hexout, TARGET);
@@ -346,10 +384,11 @@ int main(void) {{
         digest_len = digest_len,
         positions = positions,
         total = total,
-        salt_bytes = salt_bytes.join(","),
-        salt_form = scheme.salt_form,
+        salt_decl = salt_decl,
+        concat_body = concat_body,
         target_hex = target_hex,
-        selftest_pwd = sample.plaintext,
+        selftest_decl = selftest_decl,
+        selftest_len = selftest_len,
         set_decls = set_decls,
         set_refs = set_refs,
         set_lens = set_lens,
@@ -501,5 +540,63 @@ mod tests {
         );
         assert!(c.contains("#define POSITIONS 1"));
         assert!(c.contains("for (int first = 0; first < SET_LEN[0]; first++)"));
+    }
+
+    #[test]
+    fn test_c_skeleton_salt_form_b64_decoded() {
+        // B64Decoded：SALT 必须是解码后字节（此前恒取原文 → 骨架自测必挂）
+        use base64::Engine;
+        let mut scheme = single_scheme();
+        scheme.salt_form = "盐 base64 解码字节".into();
+        let raw_salt = "\u{7f}f\u{0b}\u{8d}"; // 解码后含控制字节，文本形态无法表达
+        let b64_salt = base64::engine::general_purpose::STANDARD.encode(raw_salt);
+        let decoded = base64::engine::general_purpose::STANDARD.decode(&b64_salt).unwrap();
+        let c = generate_c_skeleton(
+            &scheme,
+            &Sample { plaintext: "pw".into(), salt: b64_salt.clone(), target: "00".into() },
+            "?d",
+        );
+        let want: Vec<String> = decoded.iter().map(|b| format!("0x{b:02x}")).collect();
+        assert!(
+            c.contains(&format!("static const unsigned char SALT[] = {{{}}}", want.join(","))),
+            "SALT 必须是 base64 解码后的字节：\n{c}"
+        );
+    }
+
+    #[test]
+    fn test_c_skeleton_concat_order_and_pw_only() {
+        // 盐‖明文：组装顺序必须盐在前
+        let mut scheme = single_scheme();
+        scheme.concat = "盐‖明文".into();
+        let c = generate_c_skeleton(
+            &scheme,
+            &Sample { plaintext: "pw\"\\x".into(), salt: "s".into(), target: "00".into() },
+            "?d",
+        );
+        assert!(
+            c.contains("memcpy(buf, SALT, sizeof(SALT));\n    memcpy(buf + sizeof(SALT), pwd, pwdlen);"),
+            "盐‖明文方案的骨架必须盐在前：\n{c}"
+        );
+        // 自测桩必须字节化（口令含引号/反斜杠也能编译）
+        assert!(c.contains("static const unsigned char SELFTEST_PWD[] = {0x70,0x77,0x22,0x5c,0x78}"),);
+        assert!(!c.contains("SELFTEST_PWD[] = \""), "自测明文不允许落 C 字符串字面量");
+
+        // 仅明文：不得出现 SALT 数组
+        let mut scheme2 = single_scheme();
+        scheme2.concat = "仅明文".into();
+        let c2 = generate_c_skeleton(
+            &scheme2,
+            &Sample { plaintext: "pw".into(), salt: "s".into(), target: "00".into() },
+            "?d",
+        );
+        assert!(!c2.contains("unsigned char SALT[]"), "仅明文方案不应生成 SALT：\n{c2}");
+        assert!(c2.contains("memcpy(buf, pwd, pwdlen);"));
+    }
+
+    #[test]
+    fn test_expand_mask_total_saturates() {
+        // ?a×11 位 ≈ 95^11 ≈ 6e21 > u64::MAX（约 1.8e19）：饱和而非 panic/回绕
+        let e = estimate(&"?a".repeat(11), &single_scheme());
+        assert_eq!(e.total, u64::MAX);
     }
 }

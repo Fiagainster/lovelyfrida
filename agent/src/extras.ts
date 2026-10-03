@@ -7,34 +7,22 @@
  * - 实例调用：Java.choose + 按 hashCode 定向调用实例方法
  */
 import Java from "frida-java-bridge";
+import { emitEvent } from "./batch";
 
 // ---------------- dlopen 监控 ----------------
 
 
-/** 跨 frida 版本的导出解析（17.x 移除了静态 getExportByName；getGlobalExportByName 为新 API） */
-function resolveExport(modName: string | null, name: string): NativePointer | null {
+/** 跨 frida 版本的导出解析（17.x 移除了静态 getExportByName；getGlobalExportByName 为新 API）。
+ *  modName 给定时优先在该模块内解析（避免同名符号被全局解析到错误模块），失败再全局兜底。 */
+export function resolveExport(modName: string | null, name: string): NativePointer | null {
   const M = Module as unknown as Record<string, unknown>;
-  // 1) 17.x 新 API：全局搜索
-  if (typeof M.getGlobalExportByName === "function") {
-    try {
-      const p = (M.getGlobalExportByName as (n: string) => NativePointer)(name);
-      if (p && !p.isNull()) return p;
-    } catch { /* not found → 继续按模块找 */ }
-  }
-  // 2) 旧静态 API
-  if (typeof M.findExportByName === "function") {
-    try {
-      const p = (M.findExportByName as (m: string | null, n: string) => NativePointer | null)(modName, name);
-      if (p && !p.isNull()) return p;
-    } catch { /* continue */ }
-  }
-  // 3) 实例方法
+  // 1) 模块内实例方法（17.x 推荐；find 变体不抛错优先）
   if (modName !== null) {
     try {
       const m = (Process as unknown as { findModuleByName: (n: string) => unknown }).findModuleByName(modName);
       if (m) {
         const inst = m as unknown as Record<string, unknown>;
-        for (const meth of ["getExportByName", "findExportByName"]) {
+        for (const meth of ["findExportByName", "getExportByName"]) {
           if (typeof inst[meth] === "function") {
             try {
               const p = (inst[meth] as (n: string) => NativePointer)(name);
@@ -44,6 +32,20 @@ function resolveExport(modName: string | null, name: string): NativePointer | nu
         }
       }
     } catch { /* continue */ }
+  }
+  // 2) 旧静态 API（frida ≤16；17.x 已移除，需 typeof 探测）
+  if (typeof M.findExportByName === "function") {
+    try {
+      const p = (M.findExportByName as (m: string | null, n: string) => NativePointer | null)(modName, name);
+      if (p && !p.isNull()) return p;
+    } catch { /* continue */ }
+  }
+  // 3) 17.x 全局搜索兜底（模块内没有/未给模块名时）
+  if (typeof M.getGlobalExportByName === "function") {
+    try {
+      const p = (M.getGlobalExportByName as (n: string) => NativePointer)(name);
+      if (p && !p.isNull()) return p;
+    } catch { /* not found */ }
   }
   return null;
 }
@@ -64,7 +66,7 @@ export function watchDlopen(): { ok: boolean; hooks: number; error: string | nul
       Interceptor.attach(addr, {
         onEnter(args) {
           const path = args[0].readCString() ?? "";
-          send({ t: "dlopen", path, thread: Process.getCurrentThreadId() });
+          emitEvent({ t: "dlopen", path, thread: Process.getCurrentThreadId() });
         },
       });
       hooks++;
@@ -112,8 +114,9 @@ export function watchRegisterNatives(): { ok: boolean; symbol: string | null; er
             className = "";
           }
           const natives: { name: string; sig: string; fnPtr: string }[] = [];
+          const NativesCap = 64;
           // JNINativeMethod = { const char* name; const char* signature; void* fnPtr; } 每项 3 指针
-          for (let i = 0; i < Math.min(count, 64); i++) {
+          for (let i = 0; i < Math.min(count, NativesCap); i++) {
             try {
               const namePtr = methods.add(i * Process.pointerSize * 3).readPointer();
               const sigPtr = methods.add(i * Process.pointerSize * 3 + Process.pointerSize).readPointer();
@@ -127,7 +130,15 @@ export function watchRegisterNatives(): { ok: boolean; symbol: string | null; er
               break;
             }
           }
-          send({ t: "register_natives", class: className, count, natives, env: String(env) });
+          // 截断必须留痕：count > 上限时静默丢弃会让人误以为注册表就是这 64 条
+          emitEvent({
+            t: "register_natives",
+            class: className,
+            count,
+            natives,
+            truncated: count > NativesCap,
+            env: String(env),
+          });
         },
       });
       regNativesActive = true;
@@ -144,15 +155,21 @@ export function watchRegisterNatives(): { ok: boolean; symbol: string | null; er
 export function dumpDex(maxDex: number): {
   found: { base: string; size: number; header: string }[];
   dumped: { base: string; size: number }[];
+  skipped_ranges: number;
   error: string | null;
 } {
   const found: { base: string; size: number; header: string }[] = [];
   const dumped: { base: string; size: number }[] = [];
+  let skipped_ranges = 0;
   const DEX_MAGIC = "64 65 78 0a 30 33 ?? 00"; // dex\n03?\0（035/037/038/039）
   const ranges = Process.enumerateRanges("r--").concat(Process.enumerateRanges("rw-"));
   for (const r of ranges) {
     if (found.length >= maxDex) break;
-    if (r.size < 112 || r.size > 100 * 1024 * 1024) continue;
+    if (r.size < 112 || r.size > 100 * 1024 * 1024) {
+      // >100MB 的堆区里也可能有 dex：跳过必须计数留痕，不能无声消失
+      if (r.size > 100 * 1024 * 1024) skipped_ranges++;
+      continue;
+    }
     try {
       // 在区段内扫描 dex 魔数（头部不一定在映射起始位置）
       const matches = Memory.scanSync(r.base, r.size, DEX_MAGIC);
@@ -168,9 +185,21 @@ export function dumpDex(maxDex: number): {
           if (fileSize < 112 || fileSize > 80 * 1024 * 1024) continue;
           const baseStr = m.address.toString();
           found.push({ base: baseStr, size: fileSize, header: "dex\n0" + ver });
-          const buf = m.address.readByteArray(Math.min(fileSize, 60 * 1024 * 1024));
+          // 单条 send 上限 60MB：超限 dex 截断落盘会得到损坏文件——必须带标记，
+          // 让调用方知道「dumped_size < file_size = 证据不完整」而不是当成完整 dex
+          const dumpedBytes = Math.min(fileSize, 60 * 1024 * 1024);
+          const buf = m.address.readByteArray(dumpedBytes);
           if (buf) {
-            send({ t: "dex_dump", base: baseStr, size: fileSize }, buf as ArrayBuffer);
+            send(
+              {
+                t: "dex_dump",
+                base: baseStr,
+                size: fileSize,
+                dumped_size: dumpedBytes,
+                truncated: dumpedBytes < fileSize,
+              },
+              buf as ArrayBuffer,
+            );
             dumped.push({ base: baseStr, size: fileSize });
           }
         } catch {
@@ -181,7 +210,7 @@ export function dumpDex(maxDex: number): {
       continue;
     }
   }
-  return { found, dumped, error: null };
+  return { found, dumped, skipped_ranges, error: null };
 }
 
 // ---------------- SSL 缓冲捕获探针（r0capture 风格，只观测） ----------------
@@ -192,25 +221,33 @@ interface SslWatchState {
 }
 
 const sslWatches = new Map<string, SslWatchState>();
+// 每个导出地址只挂一次 listener：此前每个 watch 叠挂一层，N 次 watch = 每次读写 N 条重复事件
+const sslListeners = new Map<string, InvocationListener>();
+let sslMaxBuf = 512;
+const SSL_FNS = ["SSL_read", "SSL_write"] as const;
 
 export function watchSsl(
   id: string,
   maxBuf: number,
 ): { ok: boolean; hooks: string[]; error: string | null } {
   if (sslWatches.has(id)) return { ok: true, hooks: ["already"], error: null };
+  sslMaxBuf = Math.max(sslMaxBuf, maxBuf);
+  sslWatches.set(id, { id, hits: 0 });
   const hooked: string[] = [];
   let err: string | null = null;
-  const st: SslWatchState = { id, hits: 0 };
-  sslWatches.set(id, st);
   // Android 的 libssl 可能叫 libssl.so；conscrypt 场景走 Java 层 SSLOutputStream——v1 先 native
-  for (const fn of ["SSL_read", "SSL_write"]) {
+  for (const fn of SSL_FNS) {
+    if (sslListeners.has(fn)) {
+      hooked.push(fn); // 已有共享 hook：本 watch 直接复用
+      continue;
+    }
     try {
       const addr = resolveExport("libssl.so", fn);
       if (!addr) {
         err = `${fn}: libssl.so 符号未找到（部分模拟器 ROM 裁剪）`;
         continue;
       }
-      Interceptor.attach(addr, {
+      const listener = Interceptor.attach(addr, {
         onEnter(args) {
           this._buf = args[1];
           this._len = args[2].toInt32();
@@ -219,39 +256,65 @@ export function watchSsl(
         onLeave(retval) {
           const len = this._fn === "SSL_write" ? this._len : retval.toInt32();
           if (len <= 0) return;
-          st.hits++;
-          const n = Math.min(len, maxBuf);
+          const n = Math.min(len, sslMaxBuf);
+          let buf: ArrayBuffer;
           try {
-            const buf = this._buf.readByteArray(n);
+            buf = this._buf.readByteArray(n) as ArrayBuffer;
+          } catch {
+            return; /* 缓冲不可读跳过 */
+          }
+          const preview = (() => {
+            try {
+              return this._buf.readUtf8String(Math.min(n, 256));
+            } catch {
+              return null;
+            }
+          })();
+          sslWatches.forEach((st, wid) => {
+            st.hits++;
             send(
               {
                 t: "ssl_data",
-                watch: id,
+                watch: wid,
                 fn: this._fn,
                 len,
                 thread: Process.getCurrentThreadId(),
-                preview: (() => {
-                  try {
-                    return this._buf.readUtf8String(Math.min(n, 256));
-                  } catch {
-                    return null;
-                  }
-                })(),
+                preview,
               },
-              buf as ArrayBuffer,
+              buf,
             );
-          } catch {
-            /* 缓冲不可读跳过 */
-          }
+          });
         },
       });
+      sslListeners.set(fn, listener);
       hooked.push(fn);
     } catch (e) {
       err = `${fn}: ${String(e)}`;
     }
   }
-  if (hooked.length === 0) return { ok: false, hooks: [], error: err };
+  if (hooked.length === 0 && sslListeners.size === 0) {
+    sslWatches.delete(id);
+    return { ok: false, hooks: [], error: err };
+  }
   return { ok: true, hooks: hooked, error: err };
+}
+
+/** 卸载 SSL 监视；最后一个 watch 移除时真 detach（幽灵 hook 常驻高频函数是性能事故） */
+export function unwatchSsl(id: string): { removed: number; detached: boolean } {
+  const removed = sslWatches.delete(id) ? 1 : 0;
+  let detached = false;
+  if (sslWatches.size === 0 && sslListeners.size > 0) {
+    sslListeners.forEach((l) => {
+      try {
+        l.detach();
+      } catch {
+        /* 目标已卸载 */
+      }
+    });
+    sslListeners.clear();
+    detached = true;
+  }
+  return { removed, detached };
 }
 
 export function sslStats(): { id: string; hits: number }[] {

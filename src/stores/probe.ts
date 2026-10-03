@@ -22,6 +22,9 @@ export const useProbeStore = defineStore("probe", () => {
     return useDiagStore();
   }
 
+  // bindEvents 重入门（dev HMR 重跑 setup 会重复注册 Tauri 监听）
+  let bound = false;
+
   // ---------- RPC ----------
   async function rpc<T>(f: string, args: unknown[]): Promise<T> {
     rpcError.value = null;
@@ -75,25 +78,71 @@ export const useProbeStore = defineStore("probe", () => {
     trace.value = [rec, ...trace.value.slice(0, TRACE_CAP - 1)];
   }
 
+  // 高频路径（trace-event）走 200ms 批量 flush：pushTrace 的 O(cap) 数组重建
+  // 在千级事件/s 下本身就是渲染瓶颈。落盘不受影响（后端逐条全量 jsonl）。
+  const pendingTrace: TraceRecord[] = [];
+  let traceFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function flushTrace() {
+    if (traceFlushTimer !== null) {
+      clearTimeout(traceFlushTimer);
+      traceFlushTimer = null;
+    }
+    if (!pendingTrace.length) return;
+    const batch = pendingTrace.splice(0, pendingTrace.length);
+    batch.reverse(); // 到达序 → 新在前
+    trace.value = [...batch, ...trace.value].slice(0, TRACE_CAP);
+    diag().scheduleReevaluate();
+  }
+
+  function ingestTrace(recs: TraceRecord[]) {
+    for (const r of recs) pendingTrace.push(r);
+    if (pendingTrace.length >= TRACE_CAP) {
+      flushTrace(); // 洪峰保护：pending 不超过环本身
+      return;
+    }
+    if (traceFlushTimer === null) {
+      traceFlushTimer = setTimeout(flushTrace, 200);
+    }
+  }
+
   function clearTrace() {
+    pendingTrace.length = 0;
     trace.value = [];
   }
 
-  function bindEvents(listen: typeof import("@tauri-apps/api/event").listen) {
-    void listen<TraceRecord>("trace-event", (e) => {
-      pushTrace(e.payload);
-      // 高频事件走节流重算（P/O 组谓词依赖探针状态与 trace 变化）
-      diag().scheduleReevaluate();
-    });
+  /** 挂事件监听；返回清理函数（App onUnmounted 调用；重入直接返回空清理，防 HMR 重复注册） */
+  async function bindEvents(listen: typeof import("@tauri-apps/api/event").listen): Promise<() => void> {
+    if (bound) return () => {};
+    bound = true;
+    const unlisten: Array<() => void> = [];
+    unlisten.push(
+      await listen<TraceRecord>("trace-event", (e) => {
+        const p = e.payload as Partial<TraceRecord> & { t?: string; records?: TraceRecord[] };
+        // agent 批量层：后端单次 emit 携带 {t:"trace_batch", records:[TraceRecord...]}
+        if (p?.t === "trace_batch" && Array.isArray(p.records)) {
+          ingestTrace(p.records);
+          return;
+        }
+        ingestTrace([p as TraceRecord]);
+        // 高频事件走节流重算（P/O 组谓词依赖探针状态与 trace 变化）——flush 时统一触发
+      }),
+    );
     // dumpDex 落盘事件（此前后端有发前端无收）：作为一条 trace 进入时间轴
-    void listen<{ path: string; size: number; base: string }>("dex-dumped", (e) => {
-      pushTrace({
-        seq: Date.now(),
-        wall: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
-        run_id: "dex-dump",
-        payload: { t: "dex_dumped", ...e.payload },
-      });
-    });
+    unlisten.push(
+      await listen<{ path: string; size: number; base: string }>("dex-dumped", (e) => {
+        pushTrace({
+          seq: Date.now(),
+          wall: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
+          run_id: "dex-dump",
+          payload: { t: "dex_dumped", ...e.payload },
+        });
+      }),
+    );
+    return () => {
+      bound = false;
+      while (unlisten.length) unlisten.pop()?.();
+    };
   }
 
   return {
@@ -107,6 +156,8 @@ export const useProbeStore = defineStore("probe", () => {
     removeProbe,
     refreshStats,
     pushTrace,
+    ingestTrace,
+    flushTrace,
     clearTrace,
     bindEvents,
   };

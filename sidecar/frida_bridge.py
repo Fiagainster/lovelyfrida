@@ -232,15 +232,20 @@ def m_detach(params):
     return {"ok": True}
 
 
+SPAWN_GATING_BOUND = set()  # 已注册 spawn-added 回调的 device key（重复调用会叠加 handler）
+
+
 def m_enable_spawn_gating(params):
     key = params.get("device")
     with DEVICE_LOCK:
         dev = DEVICES[key]
     dev.enable_spawn_gating()
-    dev.on("spawn-added", lambda spawn: notify("spawn_added", {
-        "identifier": getattr(spawn, "identifier", None),
-        "pid": getattr(spawn, "pid", None),
-    }))
+    if key not in SPAWN_GATING_BOUND:
+        SPAWN_GATING_BOUND.add(key)
+        dev.on("spawn-added", lambda spawn: notify("spawn_added", {
+            "identifier": getattr(spawn, "identifier", None),
+            "pid": getattr(spawn, "pid", None),
+        }))
     return {"ok": True}
 
 
@@ -284,11 +289,23 @@ def handle(line: str) -> None:
 
 
 def writer_loop() -> None:
+    # 单写线程纪律不变；攒走「已就绪」的行合并为一次 write+flush：
+    # 高频事件下把 flush 系统调用从每条一次摊薄到每批一次，且不给响应增加额外延迟
     while True:
         obj = OUT.get()
-        line = json.dumps(obj, ensure_ascii=False, default=str)
-        sys.stdout.write(line + "\n")
-        sys.stdout.flush()
+        batch = [obj]
+        while len(batch) < 64:
+            try:
+                batch.append(OUT.get_nowait())
+            except queue.Empty:
+                break
+        try:
+            sys.stdout.write(
+                "".join(json.dumps(o, ensure_ascii=False, default=str) + "\n" for o in batch)
+            )
+            sys.stdout.flush()
+        except Exception:  # noqa: BLE001
+            break  # stdout 已断（宿主退出）：写线程退出，进程随 stdin EOF 收尾
 
 
 def main() -> None:

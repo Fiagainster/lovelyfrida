@@ -223,12 +223,13 @@ pub async fn injection_run(
 #[tauri::command]
 #[allow(non_snake_case)]
 pub async fn experiment_run(
+    app: tauri::AppHandle,
     state: tauri::State<'_, crate::services::session::FridaState>,
     exp: ExperimentConfig,
     caseName: Option<String>,
 ) -> Result<ExperimentReport, String> {
     let cfg = crate::config::get();
-    crate::services::experiment::run(&cfg, &state.channel, Some(&state), exp, caseName).await
+    crate::services::experiment::run(&cfg, &state.channel, &app, Some(&state), exp, caseName).await
 }
 
 /// 算法还原（文档04-F / U4）：两组样本防假命中。穷举是 CPU 密集，放阻塞线程池；
@@ -291,7 +292,7 @@ pub async fn brute_run(
         let r = brute_run_fn(&scheme, &mask, &salt, &known, max_candidates.unwrap_or(5_000_000));
         // 作业落库（失败不阻断：库不可用时爆破结果仍返回 UI）
         let sets = crate::services::brute::expand_mask(&mask);
-        let total: u64 = sets.iter().map(|s| s.len() as u64).product();
+        let total: u64 = sets.iter().fold(1u64, |acc, s| acc.saturating_mul(s.len() as u64));
         let space = serde_json::json!({ "mask": mask, "total": total }).to_string();
         let speed = if r.duration_ms > 0 {
             r.tried as f64 / (r.duration_ms as f64 / 1000.0)

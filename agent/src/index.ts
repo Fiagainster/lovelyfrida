@@ -34,6 +34,7 @@ import {
   sslStats,
   watchDlopen,
   watchRegisterNatives,
+  unwatchSsl,
   watchSsl,
 } from "./extras";
 
@@ -91,6 +92,7 @@ interface RpcExports {
   watchRegisterNatives(): unknown;
   dumpDex(q: { maxDex: number }): unknown;
   watchSsl(q: { id: string; maxBuf: number }): unknown;
+  unwatchSsl(q: { id: string }): unknown;
   sslStats(): unknown;
   chooseDetailed(q: { className: string; limit: number }): unknown;
   invokeInstance(q: { className: string; hashCode: number; methodName: string; args: string[] }): unknown;
@@ -120,6 +122,7 @@ const api: RpcExports = {
   watchRegisterNatives: () => watchRegisterNatives(),
   dumpDex: (q) => dumpDex(q.maxDex),
   watchSsl: (q) => watchSsl(q.id, q.maxBuf),
+  unwatchSsl: (q) => unwatchSsl(q.id),
   sslStats: () => sslStats(),
   chooseDetailed: (q) => chooseInstancesDetailed(q.className, q.limit),
   invokeInstance: (q) => invokeOnInstance(q.className, q.hashCode, q.methodName, q.args),

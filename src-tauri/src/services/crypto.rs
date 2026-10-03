@@ -115,6 +115,31 @@ fn salt_bytes(salt: &str, form: SaltForm) -> Vec<u8> {
     }
 }
 
+/// 按 Scheme 的字符串字段解析枚举（recompute / C 骨架生成共用；未知值 None）
+pub fn parse_concat(s: &str) -> Option<Concat> {
+    match s {
+        "明文‖盐" => Some(Concat::PwSalt),
+        "盐‖明文" => Some(Concat::SaltPw),
+        "仅明文" => Some(Concat::PwOnly),
+        _ => None,
+    }
+}
+
+pub fn parse_salt_form(s: &str) -> Option<SaltForm> {
+    match s {
+        "盐原始文本字节" => Some(SaltForm::RawText),
+        "盐 base64 解码字节" => Some(SaltForm::B64Decoded),
+        "盐解码后连写 hex 文本" => Some(SaltForm::HexText),
+        _ => None,
+    }
+}
+
+/// 方案语义下的盐字节：C 爆破器骨架与 Rust recompute 必须同源，
+/// 否则 B64Decoded/HexText 方案的骨架自测必挂
+pub fn scheme_salt_bytes(scheme: &Scheme, salt: &str) -> Vec<u8> {
+    salt_bytes(salt, parse_salt_form(&scheme.salt_form).unwrap_or(SaltForm::RawText))
+}
+
 /// 首轮输入（按拼接顺序）
 fn first_input(plaintext: &str, salt_b: &[u8], concat: Concat) -> Vec<u8> {
     match concat {
@@ -217,18 +242,8 @@ pub fn recompute(sample: &Sample, scheme: &Scheme) -> Option<String> {
         "MD5" => Family::Md5,
         _ => return None,
     };
-    let concat = match scheme.concat.as_str() {
-        "明文‖盐" => Concat::PwSalt,
-        "盐‖明文" => Concat::SaltPw,
-        "仅明文" => Concat::PwOnly,
-        _ => return None,
-    };
-    let salt_form = match scheme.salt_form.as_str() {
-        "盐原始文本字节" => SaltForm::RawText,
-        "盐 base64 解码字节" => SaltForm::B64Decoded,
-        "盐解码后连写 hex 文本" => SaltForm::HexText,
-        _ => return None,
-    };
+    let concat = parse_concat(&scheme.concat)?;
+    let salt_form = parse_salt_form(&scheme.salt_form)?;
     let salt_b = salt_bytes(&sample.salt, salt_form);
     let mut h = hash_bytes(fam, &first_input(&sample.plaintext, &salt_b, concat));
     if scheme.chain_input.starts_with("单轮") {

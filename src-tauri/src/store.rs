@@ -202,6 +202,8 @@ pub fn init() -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     conn.pragma_update(None, "foreign_keys", "ON")
         .map_err(|e| e.to_string())?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))
+        .map_err(|e| e.to_string())?;
     conn.execute_batch(DDL)
         .map_err(|e| format!("建表失败：{e}"))?;
 
@@ -253,6 +255,10 @@ fn open_db() -> Result<Connection, String> {
     let conn = Connection::open(crate::paths::cases_db_path())
         .map_err(|e| format!("打开 cases.db 失败：{e}"))?;
     conn.pragma_update(None, "foreign_keys", "ON")
+        .map_err(|e| e.to_string())?;
+    // 多写者并发（attach 落库撞 ledger/trace 写入）时等锁而不是立即 SQLITE_BUSY：
+    // rusqlite 默认 0ms，而所有调用方按「落库失败不阻断」降级——没这行等于静默丢数据
+    conn.busy_timeout(std::time::Duration::from_secs(5))
         .map_err(|e| e.to_string())?;
     Ok(conn)
 }

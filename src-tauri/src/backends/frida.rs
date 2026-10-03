@@ -48,6 +48,16 @@ struct Pending {
     next_id: AtomicU64,
 }
 
+impl Pending {
+    /// 进程死亡时把全部在途请求打成错误（drain 幂等，多处调用安全）
+    async fn fail_all(&self, reason: &str) {
+        let mut map = self.map.lock().await;
+        for (_, tx) in map.drain() {
+            let _ = tx.send(Err(reason.to_string()));
+        }
+    }
+}
+
 struct SidecarInner {
     stdin: Mutex<mpsc::Sender<String>>,
     pending: Arc<Pending>,
@@ -78,6 +88,26 @@ impl FridaChannelB {
     pub async fn subscribe(&self) -> Result<broadcast::Receiver<FridaEvent>, String> {
         let s = self.ensure().await?;
         Ok(s.subscribe())
+    }
+
+    /// 只订阅「当前已存活」的 sidecar，不主动拉起进程（forward_events 的重订阅用）。
+    /// 订阅前后各查一次 alive：把「订阅瞬间进程死亡」的窗口缩到最小。
+    pub async fn subscribe_existing(&self) -> Result<broadcast::Receiver<FridaEvent>, String> {
+        let s = self
+            .inner
+            .read()
+            .await
+            .as_ref()
+            .cloned()
+            .ok_or("sidecar 未启动")?;
+        if !s.alive.load(Ordering::SeqCst) {
+            return Err("sidecar 已退出".into());
+        }
+        let rx = s.subscribe();
+        if !s.alive.load(Ordering::SeqCst) {
+            return Err("sidecar 已退出".into());
+        }
+        Ok(rx)
     }
 
     #[allow(dead_code)] // M2 通道降级 UI 启用
@@ -186,6 +216,8 @@ async fn spawn_sidecar(launch: &crate::paths::SidecarLaunch) -> Result<Arc<Sidec
                 reason: "connectionTerminated(sidecar exited)".into(),
                 crash: None,
             });
+            // 在途请求立即报错返回，不让调用方干等 30s 超时
+            pending.fail_all("sidecar 已退出").await;
         });
     }
 
@@ -202,12 +234,15 @@ async fn spawn_sidecar(launch: &crate::paths::SidecarLaunch) -> Result<Arc<Sidec
     {
         let child = child.clone();
         let alive = alive.clone();
+        let pending_watch = pending.clone();
         tokio::spawn(async move {
             let mut slot = child.lock().await;
             if let Some(mut c) = slot.take() {
                 let _ = c.wait().await;
             }
             alive.store(false, Ordering::SeqCst);
+            // wait() 归收后兜底 drain（读循环通常先做；fail_all 幂等）
+            pending_watch.fail_all("sidecar 已退出").await;
         });
     }
 
@@ -228,12 +263,11 @@ impl SidecarInner {
         let (tx, rx) = oneshot::channel();
         self.pending.map.lock().await.insert(id, tx);
         let req = json!({"id": id, "method": method, "params": params});
-        self.stdin
-            .lock()
-            .await
-            .send(req.to_string())
-            .await
-            .map_err(|_| "sidecar stdin 已关闭")?;
+        if self.stdin.lock().await.send(req.to_string()).await.is_err() {
+            // stdin 已关闭：立即清掉在途 entry（否则 entry 泄漏到 fail_all 才收走）
+            self.pending.map.lock().await.remove(&id);
+            return Err("sidecar stdin 已关闭".into());
+        }
         match tokio::time::timeout(Duration::from_secs(30), rx).await {
             Ok(Ok(res)) => res,
             Ok(Err(_)) => Err("sidecar 响应通道关闭".into()),

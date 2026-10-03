@@ -39,16 +39,26 @@ pub async fn run(cfg: &AppConfig, deep: bool) -> DoctorReport {
     let t0 = std::time::Instant::now();
     let mode = if deep { "deep" } else { "quick" };
 
-    let c1 = check_emulator(cfg).await;
-    let c2 = check_adb(cfg).await;
-    let (c3, backend, serial) = check_connect(cfg, deep).await;
-    let c4 = check_root(&backend, &serial).await;
-    let c5 = check_selinux(&backend, &serial).await;
-    let c6 = check_abi(&backend, &serial).await;
-    let c7 = check_frida_client().await;
-    let c8 = check_version_matrix(&backend, &serial, &c7).await;
-    let c9 = check_port(&backend, &serial, cfg.frida_port).await;
+    // 并行分层（此前 10 项全串行，设备侧 7 条 shell 最坏 ~90s）：
+    // ① 本地独立项（CHK-01/02/07/10）与设备前置（CHK-03）并行；
+    // ② 设备侧五项在 (backend, serial) 就绪后并行（adb server 对并发客户端复用良好）。
+    // 总耗时从串行和收敛为两层各自的最大值；adb detect 已按输入缓存（backends/adb.rs），
+    // CHK-02/CHK-03 不再重复全量扫描。
     let c10 = check_storage(cfg);
+    let (c1, c2, c7, connect_out) = tokio::join!(
+        check_emulator(cfg),
+        check_adb(cfg),
+        check_frida_client(),
+        check_connect(cfg, deep),
+    );
+    let (c3, backend, serial) = connect_out;
+    let (c4, c5, c6, c8, c9) = tokio::join!(
+        check_root(&backend, &serial),
+        check_selinux(&backend, &serial),
+        check_abi(&backend, &serial),
+        check_version_matrix(&backend, &serial, &c7),
+        check_port(&backend, &serial, cfg.frida_port),
+    );
     let checks = vec![c1, c2, c3, c4, c5, c6, c7, c8, c9, c10];
 
     let overall = if checks.iter().any(|c| c.status == "fail") {

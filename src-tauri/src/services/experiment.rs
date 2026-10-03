@@ -99,6 +99,7 @@ async fn write_device_file(
 pub async fn run(
     cfg: &AppConfig,
     frida: &crate::backends::frida::FridaChannelB,
+    app: &tauri::AppHandle,
     session_state: Option<&crate::services::session::FridaState>,
     exp: ExperimentConfig,
     case_name: Option<String>,
@@ -199,6 +200,12 @@ pub async fn run(
         while tokio::time::Instant::now() < deadline {
             match tokio::time::timeout(Duration::from_millis(300), rx.recv()).await {
                 Err(_) => continue,
+                // Lagged 只是本订阅者落后被丢事件，channel 仍活着：继续采集。
+                // 按 break 处理会把事件洪峰误判成窗口结束（hits 偏低且无提示）。
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(n))) => {
+                    tracing::warn!("[experiment {}] 事件积压丢弃 {n} 条（窗口继续）", tpl.name);
+                    continue;
+                }
                 Ok(Err(_)) => break,
                 Ok(Ok(ev)) => {
                     if let crate::backends::frida::FridaEvent::Message {
@@ -230,17 +237,24 @@ pub async fn run(
             wall: chrono::Local::now().format("%H:%M:%S").to_string(),
         });
 
-        // 会话状态更新为本次 spawn 的会话（UI 保持真实）
+        // 会话状态更新为本次 spawn 的会话（UI 保持真实）——此前只改不发事件，
+        // 前端状态灯要等下一次轮询才刷新
         if let Some(st) = session_state {
-            let mut g = st.session.lock().await;
-            g.session_id = Some(session_id);
-            g.script_id = Some(script_id);
-            g.target = Some(format!("pid:{spawn_pid}"));
-            g.phase = crate::services::session::SessionPhase::Running;
-            g.evidence.push(format!(
-                "[实验 {}] spawn pid={spawn_pid} → 探针 {probe_status} → 命中 {hits}",
-                tpl.name
-            ));
+            let snap = {
+                let mut g = st.session.lock().await;
+                g.session_id = Some(session_id);
+                g.script_id = Some(script_id);
+                g.target = Some(format!("pid:{spawn_pid}"));
+                g.phase = crate::services::session::SessionPhase::Running;
+                crate::services::session::push_ev(&mut g, format!(
+                    "[实验 {}] spawn pid={spawn_pid} → 探针 {probe_status} → 命中 {hits}",
+                    tpl.name
+                ));
+                g.updated_at = chrono::Local::now().format("%H:%M:%S%.3f").to_string();
+                g.clone()
+            };
+            use tauri::Emitter;
+            let _ = app.emit("session-state", snap);
         }
     }
 

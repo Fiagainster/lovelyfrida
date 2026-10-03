@@ -23,15 +23,18 @@ pub struct TerminalSession {
     pub id: u32,
     pub serial: String,
     writer: std::sync::Mutex<Box<dyn Write + Send>>,
-    master: Box<dyn MasterPty + Send>,
-    child: Box<dyn portable_pty::Child + Send + Sync>,
+    /// master/child 包 std Mutex：Arc<TerminalSession> 满足 Sync + 内部可变（map 锁外可安全使用）
+    master: std::sync::Mutex<Box<dyn MasterPty + Send>>,
+    child: std::sync::Mutex<Box<dyn portable_pty::Child + Send + Sync>>,
     /// 已敲未提交的输入行：回车提交时整行入审计（逐键审计会刷屏）
     line_buf: std::sync::Mutex<String>,
 }
 
 #[derive(Default)]
 pub struct TerminalMgr {
-    pub sessions: Mutex<HashMap<u32, TerminalSession>>,
+    /// 条目用 Arc：write/resize 先短锁查表再释放，PTY 阻塞操作不持全局锁
+    /// （此前写卡死（设备拔出）会拖死所有终端的 create/write/resize/close）
+    pub sessions: Mutex<HashMap<u32, std::sync::Arc<TerminalSession>>>,
 }
 
 pub async fn create(
@@ -97,14 +100,14 @@ pub async fn create(
 
     mgr.sessions.lock().await.insert(
         id,
-        TerminalSession {
+        std::sync::Arc::new(TerminalSession {
             id,
             serial: serial.to_string(),
             writer,
-            master: pair.master,
-            child,
+            master: std::sync::Mutex::new(pair.master),
+            child: std::sync::Mutex::new(child),
             line_buf: std::sync::Mutex::new(String::new()),
-        },
+        }),
     );
     crate::audit::audit("terminal_create", serial, "done", "terminal-drawer", &format!("term#{id}"));
     Ok(info)
@@ -116,17 +119,29 @@ pub async fn write(
     id: u32,
     data: &str,
 ) -> Result<(), String> {
-    // 会话锁/写锁/行缓冲锁内完成全部同步操作（PTY 句柄非 Sync，不得跨 await 持引用），
-    // 锁外只拿 serial 与提交行列表做审计 + Recorder。
-    let (serial, committed, overflow) = {
-        let s = mgr.sessions.lock().await;
-        let t = s.get(&id).ok_or("终端会话不存在")?;
-        {
-            let mut w = t.writer.lock().map_err(|_| "writer 忙")?;
-            w.write_all(data.as_bytes())
-                .map_err(|e| format!("写入失败：{e}"))?;
+    // 短锁查表拿到 Arc 后立即释放全局锁：PTY 阻塞写只影响本会话，
+    // 且放阻塞线程池执行，不占 async worker（设备拔出时写会卡满缓冲）
+    let t: std::sync::Arc<TerminalSession> = mgr
+        .sessions
+        .lock()
+        .await
+        .get(&id)
+        .cloned()
+        .ok_or("终端会话不存在")?;
+    {
+        let t2 = t.clone();
+        let data = data.to_string();
+        tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+            let mut w = t2.writer.lock().map_err(|_| "writer 忙")?;
+            w.write_all(data.as_bytes()).map_err(|e| format!("写入失败：{e}"))?;
             w.flush().map_err(|e| format!("flush 失败：{e}"))?;
-        }
+            Ok(())
+        })
+        .await
+        .map_err(|e| format!("写任务失败：{e}"))??;
+    }
+    // 行缓冲聚合（纯内存操作）也在全局锁外
+    let (serial, committed, overflow) = {
         let mut overflow = false;
         let mut committed = Vec::new();
         {
@@ -180,9 +195,16 @@ pub async fn write(
 }
 
 pub async fn resize(mgr: &TerminalMgr, id: u32, cols: u16, rows: u16) -> Result<(), String> {
-    let s = mgr.sessions.lock().await;
-    let t = s.get(&id).ok_or("终端会话不存在")?;
-    t.master
+    let t: std::sync::Arc<TerminalSession> = mgr
+        .sessions
+        .lock()
+        .await
+        .get(&id)
+        .cloned()
+        .ok_or("终端会话不存在")?;
+    // resize 在全局锁外执行（同 write 的纪律）
+    let master = t.master.lock().map_err(|_| "master 忙")?;
+    master
         .resize(PtySize {
             rows,
             cols,
@@ -195,8 +217,8 @@ pub async fn resize(mgr: &TerminalMgr, id: u32, cols: u16, rows: u16) -> Result<
 pub async fn close(app: tauri::AppHandle, mgr: &TerminalMgr, id: u32) -> Result<(), String> {
     let t = mgr.sessions.lock().await.remove(&id);
     match t {
-        Some(mut s) => {
-            let _ = s.child.kill();
+        Some(s) => {
+            let _ = s.child.lock().map_err(|_| "child 忙")?.kill();
             if let Ok(mut w) = s.writer.lock() {
                 let _ = w.flush();
             }

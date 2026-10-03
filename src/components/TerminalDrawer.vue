@@ -2,9 +2,9 @@
 import { nextTick, onMounted, ref, watch } from "vue";
 import { NButton, NInput, useMessage } from "naive-ui";
 import { AddOutline, CloseOutline, ChevronDownOutline } from "@vicons/ionicons5";
-import { Terminal } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
-import "@xterm/xterm/css/xterm.css";
+// xterm 只做 type-only import：运行时数百 KB 改在 mountTerm 内动态加载（不用终端不付包体）
+import type { Terminal } from "@xterm/xterm";
+import type { FitAddon } from "@xterm/addon-fit";
 import { useTerminalStore } from "@/stores/terminal";
 import { api } from "@/api";
 import { useSessionStore } from "@/stores/session";
@@ -31,17 +31,24 @@ function b64ToBytes(b64: string): Uint8Array {
   return u8;
 }
 
-function mountTerm(id: number) {
+async function mountTerm(id: number) {
   if (terms.has(id)) return;
   const el = bodyEl.value?.querySelector(`#term-${id}`) as HTMLElement | null;
   if (!el) return;
-  const term = new Terminal({
+  const [{ Terminal: XTerm }, { FitAddon: Fit }] = await Promise.all([
+    import("@xterm/xterm"),
+    import("@xterm/addon-fit"),
+    import("@xterm/xterm/css/xterm.css"),
+  ]);
+  // 动态加载期间可能已挂载/已切换：双查避免重复或挂到失效节点
+  if (terms.has(id) || !el.isConnected) return;
+  const term = new XTerm({
     fontSize: 12,
     fontFamily: "Cascadia Mono, Consolas, monospace",
     cursorBlink: true,
     theme: { background: "#0a0d10", foreground: "#c9d4e0" },
   });
-  const fit = new FitAddon();
+  const fit = new Fit();
   term.loadAddon(fit);
   term.open(el);
   try {
@@ -74,7 +81,7 @@ async function onCreate() {
   try {
     await store.create(serialInput.value.trim() || "127.0.0.1:16384");
     await nextTick();
-    if (store.activeId != null) mountTerm(store.activeId);
+    if (store.activeId != null) await mountTerm(store.activeId);
   } catch (e) {
     message.error(String(e));
   } finally {
@@ -87,7 +94,7 @@ watch(
   async (id) => {
     await nextTick();
     if (id != null) {
-      mountTerm(id);
+      await mountTerm(id);
       terms.get(id)?.fit.fit();
       terms.get(id)?.term.focus();
     }
@@ -101,7 +108,7 @@ watch(
       await nextTick();
       const id = store.activeId;
       if (id != null) {
-        mountTerm(id);
+        await mountTerm(id);
         terms.get(id)?.fit.fit();
       }
     }
@@ -117,7 +124,9 @@ onMounted(() => {
 
 <template>
   <Teleport to="body">
-    <div v-if="store.drawerOpen" class="term-drawer card">
+    <!-- v-show 而非 v-if：收起只藏不卸。xterm 实例一旦 open() 绑定的是当次 DOM，
+         v-if 销毁重挂后 terms.has(id) 早退会让新 DOM 永远没有终端（白屏）。 -->
+    <div v-show="store.drawerOpen" class="term-drawer card">
       <div class="term-drawer__head">
         <div class="term-drawer__tabs">
           <div

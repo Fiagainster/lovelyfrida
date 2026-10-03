@@ -75,27 +75,35 @@ function onKeydown(e: KeyboardEvent) {
   }
 }
 
+// Tauri 事件监听的生命周期收口：此前 8 处 listen 全部丢弃 unlisten——生产无实害，
+// 但 dev HMR 一次就多一份重复监听（pushTrace/pushMessage 双份处理）
+const unlisteners: Array<() => void> = [];
+
 onMounted(() => {
   diag.startActiveProbing();
   document.documentElement.setAttribute("data-theme", settings.theme);
   void settings.load();
   window.addEventListener("keydown", onKeydown);
   if (isTauri()) {
-    // 关闭握手第一步：Rust 拦截 CloseRequested 后通知前端弹确认框
-    import("@tauri-apps/api/event").then(({ listen }) => {
-      listen("close-requested", () => {
-        app.closeDialogOpen = true;
-      });
-    });
+    // 关闭握手第一步：Rust 拦截 CloseRequested 后通知前端弹确认框；
     // frida 事件（message/detached/device_lost）+ 会话状态机事件 → store
-    import("@tauri-apps/api/event").then(({ listen }) => {
-      void sessionStore.bindEvents(listen);
-      void terminalStore.bindEvents(listen);
-      void probeStore.bindEvents(listen);
+    void import("@tauri-apps/api/event").then(async ({ listen }) => {
+      unlisteners.push(
+        await listen("close-requested", () => {
+          app.closeDialogOpen = true;
+        }),
+      );
+      unlisteners.push(await sessionStore.bindEvents(listen));
+      unlisteners.push(await terminalStore.bindEvents(listen));
+      unlisteners.push(await probeStore.bindEvents(listen));
     });
   }
 });
-onUnmounted(() => window.removeEventListener("keydown", onKeydown));
+onUnmounted(() => {
+  window.removeEventListener("keydown", onKeydown);
+  diag.stopActiveProbing();
+  while (unlisteners.length) unlisteners.pop()?.();
+});
 </script>
 
 <template>

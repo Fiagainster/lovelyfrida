@@ -38,15 +38,40 @@ pub struct ConnectReport {
     pub elapsed_ms: u64,
 }
 
+#[derive(Clone)]
 pub struct AdbBackend {
     adb: PathBuf,
     pub source: String,
     pub candidates: Vec<AdbCandidate>,
 }
 
+// detect 全量扫描（注册表 reg query ×5 + 盘符目录扫描 + where + adb version 实测）
+// 一次要 spawn 十几个子进程；而候选集在进程生命周期内基本不变。
+// 按 (configured, extra_paths) 为键缓存结果（5 分钟 TTL），消除每次命令级调用的重复扫描。
 impl AdbBackend {
     /// adb 解析顺序（E-04：模拟器自带优先）：config > env > 用户自定义 > MuMu 扫描 > bin\adb > PATH。
+    /// 带 5 分钟缓存（键 = 配置输入；改设置即换键，不受陈旧缓存影响）。
     pub async fn detect(configured: &str, extra_paths: &[String]) -> Result<Self, String> {
+        use std::collections::HashMap;
+        use std::time::Instant;
+        static CACHE: std::sync::OnceLock<tokio::sync::Mutex<HashMap<String, (AdbBackend, Instant)>>> =
+            std::sync::OnceLock::new();
+        let cache = CACHE.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()));
+        let key = format!("{}\u{1}{}", configured, extra_paths.join("\u{1}"));
+        {
+            let map = cache.lock().await;
+            if let Some((backend, at)) = map.get(&key) {
+                if at.elapsed() < Duration::from_secs(300) {
+                    return Ok(backend.clone());
+                }
+            }
+        }
+        let backend = Self::detect_uncached(configured, extra_paths).await?;
+        cache.lock().await.insert(key, (backend.clone(), Instant::now()));
+        Ok(backend)
+    }
+
+    async fn detect_uncached(configured: &str, extra_paths: &[String]) -> Result<Self, String> {
         let mut candidates: Vec<AdbCandidate> = Vec::new();
 
         let configured = configured.trim();
@@ -80,7 +105,7 @@ impl AdbBackend {
                 source: "设置·自定义 adb".into(),
             });
         }
-        for p in scan_mumu_adb() {
+        for p in scan_mumu_adb().await {
             candidates.push(AdbCandidate {
                 path: p.display().to_string(),
                 exists: true,
@@ -89,11 +114,12 @@ impl AdbBackend {
             });
         }
         // PATH 解析为绝对路径（供 server 亲和匹配；`where adb` 首行）
-        if let Ok(o) = quiet_std_command("where")
+        if let Ok(o) = quiet_command("where")
             .arg("adb")
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .output()
+            .await
         {
             if let Some(first) = String::from_utf8_lossy(&o.stdout).lines().next() {
                 let p = first.trim();
@@ -303,17 +329,7 @@ impl AdbBackend {
 }
 
 /// 创建不弹控制台窗口的子进程命令（Windows 下 CREATE_NO_WINDOW）。
-/// 同步 std 命令的静默版（A4c 修复：reg query / where 之前裸 spawn，Windows 弹黑窗）
-pub fn quiet_std_command(program: &str) -> std::process::Command {
-    let mut cmd = std::process::Command::new(program);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
-    cmd
-}
-
+/// tokio 异步命令的静默版（A4c：裸 spawn 会弹黑窗；reg/where/CIM 均走此处）
 pub fn quiet_command(program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
     let mut cmd = tokio::process::Command::new(program);
     #[cfg(windows)]
@@ -385,7 +401,7 @@ pub fn parse_devices(stdout: &str) -> Vec<AdbDevice> {
 /// 扫描常见 MuMu 安装位置（含本机实际布局 D:\System\MuMu\MuMuPlayer\nx_main\adb.exe）。
 /// 注册表定位 MuMu 安装目录（A4c：卸载项 InstallLocation，比盘符枚举准且快）。
 /// 键名覆盖 MuMu 12 常见安装标识；查不到时调用方回退盘符扫描。
-fn scan_mumu_registry() -> Vec<PathBuf> {
+async fn scan_mumu_registry() -> Vec<PathBuf> {
     let keys = [
         r"HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\MuMuPlayer-12.0",
         r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\MuMuPlayer-12.0",
@@ -395,9 +411,11 @@ fn scan_mumu_registry() -> Vec<PathBuf> {
     ];
     let mut found = Vec::new();
     for key in keys {
-        let output = quiet_std_command("reg")
+        // reg query 走 tokio 进程（P1-5 同款纪律：async 上下文不做同步 spawn 阻塞）
+        let output = quiet_command("reg")
             .args(["query", key, "/v", "InstallLocation"])
-            .output();
+            .output()
+            .await;
         let Ok(out) = output else { continue };
         let text = String::from_utf8_lossy(&out.stdout);
         for line in text.lines() {
@@ -420,9 +438,9 @@ fn scan_mumu_registry() -> Vec<PathBuf> {
     found
 }
 
-fn scan_mumu_adb() -> Vec<PathBuf> {
+async fn scan_mumu_adb() -> Vec<PathBuf> {
     // ① 注册表优先（A4c）；② 盘符扫描兜底（绿色版覆盖不到注册表时），盘符扩到 C~G
-    let mut found = scan_mumu_registry();
+    let mut found = scan_mumu_registry().await;
     let drives = ["C:", "D:", "E:", "F:", "G:"];
     let roots: Vec<PathBuf> = drives
         .iter()

@@ -16,6 +16,8 @@ export const useSessionStore = defineStore("session", () => {
   const session = ref<SessionSnapshot | null>(null);
   const attachLoading = ref(false);
   const messages = ref<{ ts: string; kind: string; text: string }[]>([]);
+  // bindEvents 重入门（dev HMR 重跑 setup 会重复注册 Tauri 监听）
+  let bound = false;
 
   const PHASES: { key: string; label: string }[] = [
     { key: "device_ready", label: "设备就绪" },
@@ -117,26 +119,42 @@ export const useSessionStore = defineStore("session", () => {
     if (messages.value.length > 100) messages.value.pop();
   }
 
-  /** App onMounted 时挂载：接收 Rust 事件 */
-  async function bindEvents(listen: typeof import("@tauri-apps/api/event").listen) {
-    await listen<FridaEventPayload>("frida-event", (e) => {
-      const { event, params } = e.payload;
-      if (event === "message") {
-        const p = params as { kind?: string; payload?: { t?: string; [k: string]: unknown } };
-        if (p.payload?.t === "pong") return; // ping 自检不刷屏
-        pushMessage(p.kind ?? "send", JSON.stringify(p.payload ?? p));
-      } else if (event === "detached") {
-        const p = params as { reason?: string };
-        pushMessage("detached", p.reason ?? "detached");
-        void refreshSession();
-      }
-      // S 组谓词依赖会话证据/消息流（detached、端口切换等信号）
-      void import("@/stores/diagnostics").then(({ useDiagStore }) => useDiagStore().scheduleReevaluate());
-    });
-    await listen<SessionSnapshot>("session-state", (e) => {
-      session.value = e.payload;
-      void import("@/stores/diagnostics").then(({ useDiagStore }) => useDiagStore().scheduleReevaluate());
-    });
+  /** 挂事件监听；返回清理函数（App onUnmounted 调用；重入直接返回空清理，防 HMR 重复注册） */
+  async function bindEvents(listen: typeof import("@tauri-apps/api/event").listen): Promise<() => void> {
+    if (bound) return () => {};
+    bound = true;
+    const unlisten: Array<() => void> = [];
+    unlisten.push(
+      await listen<FridaEventPayload>("frida-event", (e) => {
+        const { event, params } = e.payload;
+        if (event === "message") {
+          const p = params as { kind?: string; payload?: { t?: string; items?: unknown[]; [k: string]: unknown } };
+          if (p.payload?.t === "pong") return; // ping 自检不刷屏
+          if (p.payload?.t === "batch") {
+            // agent 批量层：控制台流给摘要，明细在时间轴
+            pushMessage(p.kind ?? "send", `[批量] ${p.payload.items?.length ?? 0} 条观测事件（明细见时间轴）`);
+            return;
+          }
+          pushMessage(p.kind ?? "send", JSON.stringify(p.payload ?? p));
+        } else if (event === "detached") {
+          const p = params as { reason?: string };
+          pushMessage("detached", p.reason ?? "detached");
+          void refreshSession();
+        }
+        // S 组谓词依赖会话证据/消息流（detached、端口切换等信号）
+        void import("@/stores/diagnostics").then(({ useDiagStore }) => useDiagStore().scheduleReevaluate());
+      }),
+    );
+    unlisten.push(
+      await listen<SessionSnapshot>("session-state", (e) => {
+        session.value = e.payload;
+        void import("@/stores/diagnostics").then(({ useDiagStore }) => useDiagStore().scheduleReevaluate());
+      }),
+    );
+    return () => {
+      bound = false;
+      while (unlisten.length) unlisten.pop()?.();
+    };
   }
 
   return {

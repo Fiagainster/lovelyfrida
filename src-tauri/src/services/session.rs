@@ -68,6 +68,9 @@ pub struct FridaState {
     /// preferred_channel（auto|a|b|c）：驱动 attach 的通道选择，UI 必须明示当前通道
     pub preferred_channel: String,
     pub session: Mutex<SessionSnapshot>,
+    /// attach/detach 操作护栏：双击附加此前会跑两条完整链路（两个 agent 先后加载，
+    /// 仅最后一个 script_id 被 detach）；也与 graceful_shutdown 的限时清理互斥
+    pub op_lock: Mutex<()>,
 }
 
 impl FridaState {
@@ -77,7 +80,25 @@ impl FridaState {
             channel_c: std::sync::Arc::new(crate::backends::frida_c::FridaChannelC::new()),
             preferred_channel,
             session: Mutex::new(SessionSnapshot::default()),
+            op_lock: Mutex::new(()),
         }
+    }
+}
+
+/// evidence 上限：长会话多次 attach/detach 下 snapshot 线性膨胀（每次 emit 全量 clone）。
+/// 滚动丢弃最旧条目——近期证据的价值高于远古证据。
+const EVIDENCE_CAP: usize = 400;
+
+pub(crate) fn push_ev(s: &mut SessionSnapshot, msg: impl Into<String>) {
+    if s.evidence.len() >= EVIDENCE_CAP {
+        s.evidence.remove(0);
+    }
+    s.evidence.push(msg.into());
+}
+
+pub(crate) fn extend_ev(s: &mut SessionSnapshot, msgs: impl IntoIterator<Item = String>) {
+    for m in msgs {
+        push_ev(s, m);
     }
 }
 
@@ -385,10 +406,12 @@ pub async fn attach(
     target: Value,
     case_name: Option<String>,
 ) -> Result<SessionSnapshot, String> {
+    // 操作护栏：双击附加此前会跑两条完整链路（两个 agent 先后加载，仅最后一个 script_id 被 detach）
+    let _op = state.op_lock.lock().await;
     {
         let mut s = state.session.lock().await;
         s.phase = SessionPhase::Discovering;
-        s.evidence.push("开始附加链路".into());
+        push_ev(&mut s, "开始附加链路".to_string());
         s.updated_at = chrono::Local::now().format("%H:%M:%S%.3f").to_string();
         let _ = app.emit("session-state", s.clone());
     }
@@ -403,7 +426,7 @@ pub async fn attach(
         let mut s = state.session.lock().await;
         s.phase = SessionPhase::DeviceReady;
         s.device = Some(serial.clone());
-        s.evidence.push(format!("设备就绪：{serial}"));
+        push_ev(&mut s, format!("设备就绪：{serial}"));
         let _ = app.emit("session-state", s.clone());
     }
 
@@ -411,7 +434,7 @@ pub async fn attach(
     if !port_listening(&adb, &serial, cfg.frida_port).await {
         let _ = app.emit("session-state", {
             let mut s = state.session.lock().await;
-            s.evidence.push(format!("设备端 :{} 未监听 → 自动执行安装链", cfg.frida_port));
+            push_ev(&mut s, format!("设备端 :{} 未监听 → 自动执行安装链", cfg.frida_port));
             s.clone()
         });
         let steps = attach_step(app, state, server_install(cfg, &state.channel).await, "frida-server 安装链执行失败").await?;
@@ -422,7 +445,7 @@ pub async fn attach(
     {
         let mut s = state.session.lock().await;
         s.phase = SessionPhase::ServerUp;
-        s.evidence.push(format!("frida-server 实测监听 :{}", cfg.frida_port));
+        push_ev(&mut s, format!("frida-server 实测监听 :{}", cfg.frida_port));
         let _ = app.emit("session-state", s.clone());
     }
 
@@ -434,7 +457,7 @@ pub async fn attach(
         let mut s = state.session.lock().await;
         s.phase = SessionPhase::Forwarded;
         s.forward_host_port = Some(fwd.host_port);
-        s.evidence.extend(fwd.step.evidence.clone());
+        extend_ev(&mut s, fwd.step.evidence.clone().into_iter());
         let _ = app.emit("session-state", s.clone());
     }
 
@@ -532,7 +555,7 @@ pub async fn attach(
         s.session_id = Some(session_id);
         s.script_id = Some(script_id);
         s.target = Some(target_display(&target));
-        s.evidence.push(format!(
+        push_ev(&mut s, format!(
             "attach 成功 session#{session_id}，core agent 已加载 script#{script_id}"
         ));
         let _ = app.emit("session-state", s.clone());
@@ -580,52 +603,59 @@ async fn wait_hello(
                     if *sid == script_id && kind == "send" {
                         if let Some(t) = payload.as_ref().and_then(|p| p.get("t")).and_then(|t| t.as_str()) {
                             if t == "hello" {
-                                let mut s = state.session.lock().await;
-                                s.phase = SessionPhase::Running;
-                                s.hello = payload.clone();
-                                s.evidence.push(format!(
-                                    "hello 握手成功：frida {} / pid {} / java {:?}",
-                                    payload.as_ref().and_then(|p| p.get("frida")).and_then(|v| v.as_str()).unwrap_or("?"),
-                                    payload.as_ref().and_then(|p| p.get("pid")).and_then(|v| v.as_u64()).unwrap_or(0),
-                                    payload.as_ref().and_then(|p| p.get("java")).and_then(|v| v.as_str()),
-                                ));
-                                s.evidence.push(channel_evidence.to_string());
-                                s.updated_at = chrono::Local::now().format("%H:%M:%S%.3f").to_string();
-                                // 落库（P2-3）：case→device→target→session；失败不阻断分析
-                                let db_case = case_name
-                                    .clone()
-                                    .unwrap_or_else(|| "默认案件".into());
-                                let serial_db = s.device.clone();
-                                let tgt_display = target_display(target);
+                                // 三段式持锁：spawn_blocking 落库与 trace.start（内部也有
+                                // spawn_blocking）都不得持 session 锁跨 await——否则
+                                // frida_session_status/frida_rpc/detach 全部阻塞在锁上
+                                let (db_case, serial_db, tgt_display) = {
+                                    let mut s = state.session.lock().await;
+                                    s.phase = SessionPhase::Running;
+                                    s.hello = payload.clone();
+                                    push_ev(&mut s, format!(
+                                        "hello 握手成功：frida {} / pid {} / java {:?}",
+                                        payload.as_ref().and_then(|p| p.get("frida")).and_then(|v| v.as_str()).unwrap_or("?"),
+                                        payload.as_ref().and_then(|p| p.get("pid")).and_then(|v| v.as_u64()).unwrap_or(0),
+                                        payload.as_ref().and_then(|p| p.get("java")).and_then(|v| v.as_str()),
+                                    ));
+                                    push_ev(&mut s, channel_evidence.to_string());
+                                    s.updated_at = chrono::Local::now().format("%H:%M:%S%.3f").to_string();
+                                    let db_case = case_name.clone().unwrap_or_else(|| "默认案件".into());
+                                    (db_case, s.device.clone(), target_display(target))
+                                };
+                                // 落库（P2-3）：case→device→target→session；失败不阻断分析（锁外执行）
                                 let ch = channel_db.to_string();
                                 let db_result = tauri::async_runtime::spawn_blocking(move || {
                                     crate::store::session_start(&db_case, serial_db.as_deref(), &tgt_display, &ch, "attach 成功（hello 握手通过）")
                                 })
                                 .await;
-                                match db_result {
-                                    Ok(Ok(id)) => s.db_session_id = Some(id),
-                                    Ok(Err(e)) => {
-                                        s.evidence.push(format!("会话落库跳过：{e}"));
-                                        tracing::warn!("[session] 会话落库失败（不阻断）：{e}");
+                                {
+                                    let mut s = state.session.lock().await;
+                                    match db_result {
+                                        Ok(Ok(id)) => s.db_session_id = Some(id),
+                                        Ok(Err(e)) => {
+                                            push_ev(&mut s, format!("会话落库跳过：{e}"));
+                                            tracing::warn!("[session] 会话落库失败（不阻断）：{e}");
+                                        }
+                                        Err(e) => {
+                                            push_ev(&mut s, format!("会话落库跳过：{e}"));
+                                            tracing::warn!("[session] 会话落库任务失败（不阻断）：{e}");
+                                        }
                                     }
-                                    Err(e) => {
-                                        s.evidence.push(format!("会话落库跳过：{e}"));
-                                        tracing::warn!("[session] 会话落库任务失败（不阻断）：{e}");
-                                    }
+                                    push_ev(&mut s, "trace run 已开启".to_string());
+                                    s.updated_at = chrono::Local::now().format("%H:%M:%S%.3f").to_string();
+                                    let snap = s.clone();
+                                    let _ = app.emit("session-state", snap.clone());
+                                    drop(s);
+                                    let trace: State<std::sync::Arc<crate::services::trace::TraceState>> = app.state();
+                                    trace.start(snap.db_session_id).await;
+                                    crate::audit::audit(
+                                        "session_attach",
+                                        snap.target.as_deref().unwrap_or(""),
+                                        "done",
+                                        "session-console",
+                                        &format!("channel={channel_db} script#{script_id}"),
+                                    );
+                                    return Ok(snap);
                                 }
-                                s.evidence.push("trace run 已开启".into());
-                                let snap = s.clone();
-                                let _ = app.emit("session-state", snap.clone());
-                                let trace: State<std::sync::Arc<crate::services::trace::TraceState>> = app.state();
-                                trace.start(snap.db_session_id).await;
-                                crate::audit::audit(
-                                    "session_attach",
-                                    snap.target.as_deref().unwrap_or(""),
-                                    "done",
-                                    "session-console",
-                                    &format!("channel={channel_db} script#{script_id}"),
-                                );
-                                return Ok(snap);
                             }
                         }
                     }
@@ -645,7 +675,7 @@ fn target_display(target: &Value) -> String {
 async fn fail(app: &tauri::AppHandle, state: &FridaState, msg: &str) -> Result<SessionSnapshot, String> {
     let mut s = state.session.lock().await;
     s.phase = SessionPhase::Failed;
-    s.evidence.push(format!("✖ {msg}"));
+    push_ev(&mut s, format!("✖ {msg}"));
     s.updated_at = chrono::Local::now().format("%H:%M:%S%.3f").to_string();
     let snap = s.clone();
     let _ = app.emit("session-state", snap.clone());
@@ -669,38 +699,35 @@ async fn attach_step<T>(
 }
 
 pub async fn detach(app: &tauri::AppHandle, state: &FridaState) -> Result<SessionSnapshot, String> {
-    let mut s = state.session.lock().await;
+    // 操作护栏：与 attach 互斥（防止分离中途并发附加），也与 graceful_shutdown 互斥
+    let _op = state.op_lock.lock().await;
+    // 阶段1：短锁读出会话要素，随即还锁——sidecar RPC（各 30s 超时）、trace 落盘、
+    // 落库收尾都是慢操作，此前全程持锁，sidecar 挂死时 detach 最长阻塞持锁 ~60s+
+    let (channel_tag, script_id, session_id, db_session_id) = {
+        let s = state.session.lock().await;
+        (s.channel.clone(), s.script_id, s.session_id, s.db_session_id)
+    };
     // 分离是尽力而为的清理：单步失败不阻断后续步骤，但必须留痕而不是吞掉
     let mut errors: Vec<String> = Vec::new();
-    if s.channel == "C" {
+    if channel_tag == "C" {
         // 通道C：CLI 子进程就是会话本体，杀进程即卸载
         state.channel_c.detach().await;
-        s.evidence.push("通道C CLI 进程已终止（脚本随之卸载）".into());
     } else {
-        if let Some(script_id) = s.script_id {
+        if let Some(script_id) = script_id {
             if let Err(e) = state.channel.call("unload_script", json!({"script_id": script_id})).await {
                 errors.push(format!("卸载脚本 script#{script_id} 失败：{e}"));
             }
         }
-        if let Some(session_id) = s.session_id {
+        if let Some(session_id) = session_id {
             if let Err(e) = state.channel.call("detach", json!({"session_id": session_id})).await {
                 errors.push(format!("detach session#{session_id} 失败：{e}"));
             }
         }
     }
-    s.phase = SessionPhase::Stopped;
-    s.session_id = None;
-    s.script_id = None;
-    s.hello = None;
-    s.evidence.push("已分离（脚本卸载 + 会话 detach）".into());
-    {
-        let trace: State<std::sync::Arc<crate::services::trace::TraceState>> = app.state();
-        if let Some(rid) = trace.stop().await {
-            s.evidence.push(format!("trace run {rid} 已落盘"));
-        }
-    }
-    // 落库收尾（P2-3）
-    if let Some(db_id) = s.db_session_id.take() {
+    let trace: State<std::sync::Arc<crate::services::trace::TraceState>> = app.state();
+    let trace_rid = trace.stop().await;
+    // 落库收尾（P2-3，锁外执行）
+    if let Some(db_id) = db_session_id {
         if let Err(e) =
             tauri::async_runtime::spawn_blocking(move || crate::store::session_finish(db_id, "stopped", "用户主动分离")).await
         {
@@ -710,10 +737,27 @@ pub async fn detach(app: &tauri::AppHandle, state: &FridaState) -> Result<Sessio
     if !errors.is_empty() {
         crate::audit::audit("session_detach", "app", "warn", "session-console", &errors.join("；"));
     }
-    s.evidence.extend(errors);
-    s.updated_at = chrono::Local::now().format("%H:%M:%S%.3f").to_string();
-    let snap = s.clone();
-    let _ = app.emit("session-state", snap.clone());
+    // 阶段2：重新持锁落终态并 emit
+    let snap = {
+        let mut s = state.session.lock().await;
+        if channel_tag == "C" {
+            push_ev(&mut s, "通道C CLI 进程已终止（脚本随之卸载）".to_string());
+        }
+        s.phase = SessionPhase::Stopped;
+        s.session_id = None;
+        s.script_id = None;
+        s.hello = None;
+        s.db_session_id = None;
+        push_ev(&mut s, "已分离（脚本卸载 + 会话 detach）".to_string());
+        if let Some(rid) = trace_rid {
+            push_ev(&mut s, format!("trace run {rid} 已落盘"));
+        }
+        extend_ev(&mut s, errors.into_iter());
+        s.updated_at = chrono::Local::now().format("%H:%M:%S%.3f").to_string();
+        let snap = s.clone();
+        let _ = app.emit("session-state", snap.clone());
+        snap
+    };
     crate::audit::audit("session_detach", "app", "done", "session-console", "用户主动分离");
     Ok(snap)
 }
@@ -733,34 +777,53 @@ pub async fn ping(state: &FridaState) -> Result<Value, String> {
     Ok(json!({"posted": true}))
 }
 
-/// 供 lib.rs 启动时挂的全局事件转发（sidecar → 前端 + trace 管线）
+/// 供 lib.rs 启动时挂的全局事件转发（sidecar → 前端 + trace 管线）。
+/// sidecar 重启时 ensure() 会整体替换 broadcast channel（backends/frida.rs），
+/// 旧 channel 的 recv 返回 Closed——外层必须重新订阅新 channel，否则 trace 落盘
+/// 与前端时间轴自此静默失效（wait_hello 有自己的订阅，恰好会掩盖此问题）。
 pub async fn forward_events(
     handle: tauri::AppHandle,
     frida: FridaChannelB,
     trace: std::sync::Arc<crate::services::trace::TraceState>,
 ) {
-    match frida.subscribe().await {
-        Ok(mut rx) => {
+    loop {
+        // 只订阅已存活的 sidecar，不主动拉起进程（首启/重启由首次 API 调用触发）
+        if let Ok(mut rx) = frida.subscribe_existing().await {
             loop {
                 match rx.recv().await {
                     Ok(ev) => {
-                        let v = serde_json::to_value(&ev).unwrap_or(Value::Null);
                         if let FridaEvent::Message { script_id, payload, data_b64, .. } = &ev {
                             crate::services::trace::on_agent_message(&handle, &trace, payload.as_ref().unwrap_or(&Value::Null), *script_id, data_b64);
                         }
-                        let _ = handle.emit("frida-event", v);
+                        // 大包不进 webview：data_b64 只属于 trace 管线（dex 落盘后有
+                        // dex-dumped 事件），MB 级 base64 走 IPC 会把 webview 打卡
+                        const MAX_EVENT_B64: usize = 1 << 20;
+                        let out = match &ev {
+                            FridaEvent::Message { data_b64: Some(d), .. } if d.len() > MAX_EVENT_B64 => {
+                                let mut redacted = ev.clone();
+                                if let FridaEvent::Message { data_b64, .. } = &mut redacted {
+                                    *data_b64 = Some(format!("<{d} bytes 已由 trace 管线处理，此处省略>"));
+                                }
+                                redacted
+                            }
+                            _ => ev.clone(),
+                        };
+                        // 直接序列化事件本身（此前 to_value + emit 序列化了两次）
+                        let _ = handle.emit("frida-event", &out);
                         if let FridaEvent::Detached { reason, .. } = &ev {
                             crate::audit::audit("frida_detached", "session", "warn", "sidecar", reason);
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                         tracing::warn!("[frida] 事件积压丢弃 {n} 条");
+                        // 丢弃发生在 trace 落盘之前：jsonl 补 gap 记录，证据文件必须能解释行号空洞
+                        crate::services::trace::on_gap(&handle, &trace, n);
                     }
-                    Err(_) => break,
+                    Err(_) => break, // channel 关闭：sidecar 已重启换新 channel，外层重订阅
                 }
             }
         }
-        Err(e) => tracing::warn!("[frida] 事件订阅失败：{e}（sidecar 将在首次调用时重启）"),
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
 }
 

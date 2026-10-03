@@ -6,6 +6,7 @@
  * - 声明式探针挂载：重载全展开、$init、byte[] hex、截断、三态上报、命中计数（O-01/O-02/O-03）
  */
 import Java from "frida-java-bridge";
+import { emitEvent } from "./batch";
 import { encodeValue, EncValue } from "./value";
 
 export function javaAvailable(): boolean {
@@ -180,7 +181,7 @@ export interface ProbeDecl {
   maxLen?: number;
   captureRet?: boolean;
   backtrace?: boolean;
-  /** 可选条件表达式（js，this/arguments 可用，返回 boolean） */
+  /** 可选条件表达式（js，变量 this_ = 调用对象、arguments = 参数数组，返回 truthy 才上报） */
   condition?: string;
 }
 
@@ -191,12 +192,15 @@ interface ProbeState {
   status: "waiting" | "active" | "error";
   lastError: string | null;
   installedAtLoader: string | null;
+  /** 安装期一次性编译的条件函数（编译失败 = 探针 error，不带病挂载） */
+  condFn: ((this_: unknown, args: unknown[]) => unknown) | null;
 }
 
 export const probes = new Map<string, ProbeState>();
 
 function sendProbeEvent(payload: Record<string, unknown>): void {
-  send(payload as unknown as { [key: string]: unknown });
+  // 高频路径走批量层（O-02）：单条 send → 100ms/256 条合并
+  emitEvent(payload);
 }
 
 function installOne(decl: ProbeDecl): void {
@@ -213,13 +217,11 @@ function installOne(decl: ProbeDecl): void {
         return ov.apply(this, args);
       }
       st.hits++;
-      // 条件过滤（O-03 场景下配合使用；抛错按不过滤处理并计入 errors）
-      if (decl.condition) {
+      // 条件过滤（O-03）：安装期已编译为 condFn；运行期异常按不过滤处理并计入 errors
+      if (st.condFn) {
         let pass = true;
         try {
-          // eslint-disable-next-line @typescript-eslint/no-implied-eval
-          const cond = new Function("this_", "arguments", `"use strict"; return (${decl.condition});`);
-          pass = cond(this, args) as boolean;
+          pass = Boolean(st.condFn(this, args));
         } catch (e) {
           st.errors++;
           st.lastError = `condition: ${String(e)}`;
@@ -275,14 +277,38 @@ export function addProbes(decls: ProbeDecl[]): {
         status: "waiting",
         lastError: null,
         installedAtLoader: null,
+        condFn: null,
       };
       probes.set(decl.id, st);
+      // 条件表达式安装期一次性编译（此前逐命中 new Function + "use strict" 内联，
+      // 而 arguments 作严格模式形参是 SyntaxError → 条件过滤从未生效且 errors 虚增）。
+      // 不带 "use strict"：用户可见变量名保持 arguments/this_（UI 提示即此写法）。
+      if (decl.condition) {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-implied-eval
+          st.condFn = new Function("this_", "arguments", `return (${decl.condition});`) as (t: unknown, a: unknown[]) => unknown;
+        } catch (e) {
+          st.status = "error";
+          st.lastError = `condition 编译失败：${String(e)}`;
+          results.push({ id: decl.id, status: "error", error: st.lastError });
+          sendProbeEvent({ t: "probe_error", id: decl.id, phase: "install", error: st.lastError });
+          continue;
+        }
+      }
       const attempt = (retry: number) => {
         try {
+          // 重试竞态防护：延迟重试期间探针可能已被 removeProbes 删除
+          if (!probes.has(decl.id)) return;
           installOne(decl);
           st.status = "active";
           st.installedAtLoader = String(Java.classFactory.loader);
-          results.push({ id: decl.id, status: "active", error: null });
+          if (retry === 0) {
+            results.push({ id: decl.id, status: "active", error: null });
+          } else {
+            // 重试成功发生在 RPC 返回之后：results 数组已序列化，宿主收不到——
+            // 必须主动上报，否则 UI 永远显示 waiting 而探针实际已挂上
+            sendProbeEvent({ t: "probe_status", id: decl.id, status: "active", via: "retry", retry });
+          }
         } catch (e) {
           const msg = String(e);
           const classMissing = msg.includes("ClassNotFoundException") || msg.includes("java.lang.Class");
@@ -309,9 +335,28 @@ export function addProbes(decls: ProbeDecl[]): {
 export function removeProbes(ids: string[]): { removed: number } {
   return performSync(() => {
     let removed = 0;
+    const findLoader = (needle: string): unknown => {
+      let hit: unknown = null;
+      Java.enumerateClassLoadersSync().forEach((l: unknown) => {
+        if (String(l) === needle) hit = l;
+      });
+      return hit;
+    };
     for (const id of ids) {
       const st = probes.get(id);
       if (!st) continue;
+      // 回到安装时的 classloader 再卸载（installedAtLoader 此前记录了却没用）：
+      // 切过 loader 后按当前 factory resolve 会命中另一个 classloader 的同名类——
+      // 对它的方法置 null 卸不掉真正的 hook，还上报「已移除」
+      const prevLoader = String(Java.classFactory.loader);
+      let switched = false;
+      if (st.installedAtLoader !== null && st.installedAtLoader !== prevLoader) {
+        const target = findLoader(st.installedAtLoader);
+        if (target) {
+          (Java.classFactory as unknown as { loader: unknown }).loader = target;
+          switched = true;
+        }
+      }
       try {
         const C = Java.use(st.decl.clazz);
         const m = st.decl.method === "$init" ? C.$init : C[st.decl.method];
@@ -322,6 +367,13 @@ export function removeProbes(ids: string[]): { removed: number } {
       } catch {
         // 类已卸载等情况：视为已移除
         removed++;
+      } finally {
+        if (switched) {
+          const prev = findLoader(prevLoader);
+          if (prev) {
+            (Java.classFactory as unknown as { loader: unknown }).loader = prev;
+          }
+        }
       }
       probes.delete(id);
     }
