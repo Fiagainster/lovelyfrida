@@ -2,7 +2,7 @@
 
 > 把 Frida 动态分析从「命令行的手艺」变成「看得见、可回放、能自证的工作台」。
 
-**当前状态：M0~M5 核心全部落地并真机验收（外壳/体检/只读保护 → frida 三通道/会话/终端/Recorder → agent 通用底座/探针/探索器/REPL/时间轴 → 回灌七步/实验台/差分矩阵 → 算法还原/爆破编排 → Evidence 台账/案卷包）；完善计划四阶段全部完成（P0 真 bug 清零 + 安全纪律兑现 → 诊断引擎 48 条数据驱动 + 爆破掩码循环 + 落库迁移 → 通道C/视图零占位 → 单安装包分发）。2026-10 优化批次三~六：正确性清零（事件管线自愈/证据留痕/agent 六项/锁纪律）、事件链路批量化（agent 批量层 + 虚拟滚动时间轴）、adb/体检/终端提速、CI 流水线、frida-server 按需下载 + 瘦身构建 opt-in（详见 docs/10 附二施工状态）。**
+**当前状态：M0~M5 核心全部落地并真机验收（外壳/体检/只读保护 → frida 三通道/会话/终端/Recorder → agent 通用底座/探针/探索器/REPL/时间轴 → 回灌七步/实验台/差分矩阵 → 算法还原/爆破编排 → Evidence 台账/案卷包）；完善计划四阶段全部完成（P0 真 bug 清零 + 安全纪律兑现 → 诊断引擎 48 条数据驱动 + 爆破掩码循环 + 落库迁移 → 通道C/视图零占位 → 单安装包分发）。2026-10 优化批次三~六 + 批次七真机联调（MuMu x86_64 全业务链打通：U4 真案还原/U5 爆破 HIT/击杀自愈验收通过；联调揪出并修复 sidecar 假死、GBK 输出、同方法位探针顶掉等真 bug；验收脚本见 scripts/it_layer1_sidecar.py 与 it_layer2_gui.py，施工记录见 docs/10 阶段⑤）。**
 
 ---
 
@@ -68,6 +68,11 @@ cd src-tauri && cargo check
 ```
 
 - **首次克隆后先构建 agent**（`cd agent && npm install && npm run build`）：`agent/dist/core.js` 是 gitignore 的本地构建产物，Rust 侧 `include_str!` 编译期依赖它（CI 已按此顺序固化）。
+- **真机联调/验收脚本**（需 MuMu 运行、root、frida-server 在位）：
+  `python scripts/it_layer1_sidecar.py com.notevault.app <host_port>`（协议层 18 项）；
+  `python scripts/it_layer2_gui.py`（CDP 驱动真实 UI 全业务链，需以
+  `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--remote-debugging-port=9223 --remote-allow-origins=*"` 启动应用）。
+  注意：混用不同版本的 adb CLI 与应用会触发 E-01/E-04 server 乒乓（详见 docs/10 阶段⑤坑位记录）。
 
 - 端口被 WinNAT 间歇保留（EACCES）时 `dev.mjs` 会自动换端口，无需手动处理。
 - 配置在首次运行生成 `config.toml`（含 `[doctor]` 体检可配置段、只读根、frida 端口）。

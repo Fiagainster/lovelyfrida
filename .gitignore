@@ -47,4 +47,3 @@ build/
 # ===== 联调临时产物（批次七） =====
 sidecar/wrapper/
 logs/wrapper/
-wrap_exe.py

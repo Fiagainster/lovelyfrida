@@ -38,8 +38,9 @@ nav_expanded = true
 [doctor]
 # 启动时自动跑一次「快速体检」（<2s；深度连接动作始终由深度体检兜底）
 auto_run_on_startup = false
-# 模拟器 adb 端口候选（深度体检按此列表连接；MuMu 12 默认 16384/16385/7555）
-emulator_ports = [16384, 16385, 7555]
+# 模拟器 adb 端口候选（深度体检按此列表连接；MuMu 12 默认 16384/16385/7555，
+#   但不同版本/实例可能监听 5555——联调实测：netstat 确认后补进此列表）
+emulator_ports = [16384, 16385, 7555, 5555]
 # 自定义 adb 候选路径（优先于自动扫描）
 adb_extra_paths = []
 # 深度体检 connect 超时秒数
