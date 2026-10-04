@@ -47,6 +47,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::app_cmd::get_app_info,
             commands::app_cmd::confirm_close,
+            commands::app_cmd::cancel_close,
             commands::config_cmd::get_config,
             commands::config_cmd::update_config,
             commands::adb_cmd::resolve_adb,
@@ -113,8 +114,10 @@ pub fn run() {
                     std::thread::spawn(move || {
                         std::thread::sleep(Duration::from_secs(10));
                         let s: State<AppState> = handle.state();
-                        if s.shutdown_phase.load(Ordering::SeqCst) == SHUTDOWN_WAITING {
-                            tracing::warn!("关闭确认 10 秒无响应，执行保底关停");
+                        // WAITING（用户一直没应答）或 SHUTTING（清理线程意外卡死）都保底强杀：
+                        // graceful_shutdown 幂等，二次调用只会再拉一条限时清理线程 → 必然 exit
+                        if s.shutdown_phase.load(Ordering::SeqCst) != SHUTDOWN_IDLE {
+                            tracing::warn!("关闭确认 10 秒未完成，执行保底关停");
                             graceful_shutdown(&handle);
                         }
                     });
@@ -152,20 +155,33 @@ pub fn run() {
         .expect("LovelyFrida 启动失败");
 }
 
+/// 优雅关停（关闭握手第三步）：限时清理（detach 会话 + 关 PTY）后必然退出。
+///
+/// ⚠️ 清理必须在独立 std 线程跑：confirm_close 是 async 命令（tokio worker 线程），
+/// 在 worker 上 `block_on` 会 panic（"Cannot block the current thread from within a
+/// runtime"），panic 把 phase 留在 SHUTTING → 旧看门狗条件（==WAITING）不再命中 →
+/// 应用永久无法退出（真机联调后用户实测：只能任务管理器强杀）。
 pub fn graceful_shutdown(app: &tauri::AppHandle) {
     let state: State<AppState> = app.state();
-    state
+    let already = state
         .shutdown_phase
-        .store(state::SHUTDOWN_SHUTTING, Ordering::SeqCst);
-    audit::audit("shutdown", "app", "done", "close-handshake", "优雅关停：限时清理");
-    // 兑现 M1 注释承诺（此前是空壳：直接 exit(0)，设备会话与 PTY 均不收尾）。
-    // 每步各自带超时——卡死的子进程不拖住退出：
-    // ① frida 会话分离（unload agent + detach + trace 落盘收尾 + 落库收尾）；
-    // ② PTY 终端逐个关闭（杀 adb shell 子进程）。
-    // sidecar/adb 客户端进程由 kill_on_drop + 进程退出兜底；设备端 frida-server 保留
-    // （取证工具不假设下一次连接环境，设备侧状态由会话链路自行探测/拉起）。
+        .swap(state::SHUTDOWN_SHUTTING, Ordering::SeqCst)
+        == state::SHUTDOWN_SHUTTING;
+    if !already {
+        audit::audit("shutdown", "app", "done", "close-handshake", "优雅关停：限时清理");
+    }
     let handle = app.clone();
-    tauri::async_runtime::block_on(async move {
+    // 清理任务丢回 tokio runtime 正常跑（绝不从外部线程 block_on：Handle::block_on
+    // 在 runtime 外的线程上不驱动 timer/IO 驱动，8s 总闸自己永远到不了——真机实测卡死）。
+    // 外部线程只做两件事：盯完成旗标（≤8s）→ exit(0)。exit 从任何线程调用都安全。
+    let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let done_task = done.clone();
+    tauri::async_runtime::spawn(async move {
+        // 兑现 M1 注释承诺：每步各自带超时——卡死的子进程不拖住退出
+        // ① frida 会话分离（unload agent + detach + trace 落盘收尾 + 落库收尾）；
+        // ② PTY 终端逐个关闭（杀 adb shell 子进程）。
+        // sidecar/adb 客户端进程由 kill_on_drop + 进程退出兜底；设备端 frida-server
+        // 保留（取证工具不假设下一次连接环境，设备侧状态由会话链路自行探测/拉起）。
         let frida = handle.state::<services::session::FridaState>();
         let _ = tokio::time::timeout(Duration::from_secs(4), services::session::detach(&handle, &frida)).await;
         let term = handle.state::<services::terminal::TerminalMgr>();
@@ -173,8 +189,17 @@ pub fn graceful_shutdown(app: &tauri::AppHandle) {
         for id in ids {
             let _ = tokio::time::timeout(Duration::from_secs(2), services::terminal::close(handle.clone(), &term, id)).await;
         }
+        done_task.store(true, std::sync::atomic::Ordering::SeqCst);
     });
-    let _ = app.exit(0);
+    let handle_exit = app.clone();
+    let done_watch = done.clone();
+    std::thread::spawn(move || {
+        let t0 = std::time::Instant::now();
+        while !done_watch.load(std::sync::atomic::Ordering::SeqCst) && t0.elapsed() < Duration::from_secs(8) {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let _ = handle_exit.exit(0);
+    });
 }
 
 fn init_logging() {

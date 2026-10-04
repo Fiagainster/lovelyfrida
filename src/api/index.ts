@@ -247,6 +247,7 @@ export const api = {
   fridaSessionPing: () => invoke<Record<string, unknown>>("frida_session_ping"),
 
   confirmClose: () => invoke<void>("confirm_close"),
+  cancelClose: () => invoke<void>("cancel_close"),
 
   // 终端（PTY）
   terminalCreate: (serial: string) => invoke<TerminalInfo>("terminal_create", { serial }),

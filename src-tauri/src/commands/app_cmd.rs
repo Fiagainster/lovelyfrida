@@ -32,3 +32,16 @@ pub async fn confirm_close(app: tauri::AppHandle, state: tauri::State<'_, AppSta
     crate::graceful_shutdown(&app);
     Ok(())
 }
+
+/// 关闭握手取消：用户点了「取消」（或 ESC/蒙层关闭）——状态机拉回 IDLE，
+/// 10s 看门狗不再保底强杀。仅 WAITING → IDLE；SHUTTING 不可逆（清理已在跑）。
+#[tauri::command]
+pub async fn cancel_close(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let _ = state.shutdown_phase.compare_exchange(
+        crate::state::SHUTDOWN_WAITING,
+        crate::state::SHUTDOWN_IDLE,
+        std::sync::atomic::Ordering::SeqCst,
+        std::sync::atomic::Ordering::SeqCst,
+    );
+    Ok(())
+}

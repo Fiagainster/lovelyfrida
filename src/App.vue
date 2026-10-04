@@ -51,13 +51,34 @@ const activeComponent = computed(() => {
   return PlaceholderView;
 });
 
+// 关闭握手前端侧：确认走 confirm_close（Rust 限时清理后退出）；
+// 取消/ESC/蒙层关闭走 cancel_close（Rust 状态机拉回 IDLE，看门狗不再强杀）
+let closeConfirming = false;
+
 async function doConfirmClose() {
+  closeConfirming = true;
   app.closeDialogOpen = false;
   try {
     await api.confirmClose();
   } catch {
     /* Rust 端退出流程接管 */
+  } finally {
+    closeConfirming = false;
   }
+}
+
+async function doCancelClose() {
+  app.closeDialogOpen = false;
+  try {
+    await api.cancelClose();
+  } catch {
+    /* 会话期状态，失败无害 */
+  }
+}
+
+// ESC / 蒙层点击关闭对话框（非确认路径）也回 IDLE，防止看门狗 10s 后误杀
+function onDialogClosed() {
+  if (!closeConfirming) void doCancelClose();
 }
 
 // ---------- 键盘优先（文档03：⌘K 面板、数字 1~6 切视图） ----------
@@ -172,7 +193,8 @@ onUnmounted(() => {
       </div>
       <StatusBar />
 
-      <!-- 关闭确认握手（LovelyMem 协议：Rust 拦截 + 10s 超时保底） -->
+      <!-- 关闭确认握手（LovelyMem 协议：Rust 拦截 + 10s 超时保底）。
+           取消（按钮/ESC/蒙层）必须回 Rust 置回 IDLE，否则 10s 看门狗会强杀 -->
       <NModal
         v-model:show="app.closeDialogOpen"
         preset="dialog"
@@ -182,6 +204,8 @@ onUnmounted(() => {
         positive-text="确认退出"
         negative-text="取消"
         @positive-click="doConfirmClose"
+        @negative-click="doCancelClose"
+        @close="onDialogClosed"
       />
 
       <CommandPalette />
