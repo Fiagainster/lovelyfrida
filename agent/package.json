@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "build": "esbuild src/index.ts --bundle --platform=neutral --format=iife --outfile=dist/core.js --charset=utf8",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "buffer": "^6.0.3",
@@ -13,6 +14,7 @@
   "devDependencies": {
     "@types/frida-gum": "^19.11.0",
     "esbuild": "^0.28.2",
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.2",
+    "vitest": "^5.0.3"
   }
 }

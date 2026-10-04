@@ -35,6 +35,7 @@ jobs:
         run: |
           npm ci
           npm run check
+          npm test
           npm run build
 
       - name: 前端测试 + 类型检查 + 构建
@@ -86,6 +87,7 @@ jobs:
         run: |
           npm ci
           npm run check
+          npm test
           npm run build
 
       - name: 前端构建

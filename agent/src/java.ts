@@ -6,6 +6,7 @@
  * - 声明式探针挂载：重载全展开、$init、byte[] hex、截断、三态上报、命中计数（O-01/O-02/O-03）
  */
 import Java from "frida-java-bridge";
+import { compileCondition } from "./condition";
 import { emitEvent } from "./batch";
 import { encodeValue, EncValue } from "./value";
 
@@ -300,8 +301,7 @@ export function addProbes(decls: ProbeDecl[]): {
       // 不带 "use strict"：用户可见变量名保持 arguments/this_（UI 提示即此写法）。
       if (decl.condition) {
         try {
-          // eslint-disable-next-line @typescript-eslint/no-implied-eval
-          st.condFn = new Function("this_", "arguments", `return (${decl.condition});`) as (t: unknown, a: unknown[]) => unknown;
+          st.condFn = compileCondition(decl.condition);
         } catch (e) {
           st.status = "error";
           st.lastError = `condition 编译失败：${String(e)}`;
