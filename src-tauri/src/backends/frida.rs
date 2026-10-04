@@ -69,6 +69,9 @@ struct SidecarInner {
 #[derive(Clone)]
 pub struct FridaChannelB {
     inner: Arc<RwLock<Option<Arc<SidecarInner>>>>,
+    /// spawn 单飞锁：并发首调（如诊断巡检撞上 UI 刷新）此前会双双 spawn，
+    /// 后者整体替换 inner 使前者被 kill_on_drop 杀死 → "sidecar 已退出"
+    spawn_lock: Arc<Mutex<()>>,
     launch: crate::paths::SidecarLaunch,
 }
 
@@ -76,6 +79,7 @@ impl FridaChannelB {
     pub fn new(launch: crate::paths::SidecarLaunch) -> Self {
         Self {
             inner: Arc::new(RwLock::new(None)),
+            spawn_lock: Arc::new(Mutex::new(())),
             launch,
         }
     }
@@ -116,9 +120,22 @@ impl FridaChannelB {
     }
 
     async fn ensure(&self) -> Result<Arc<SidecarInner>, String> {
-        if let Some(s) = self.inner.read().await.as_ref() {
-            if s.alive.load(Ordering::SeqCst) {
-                return Ok(s.clone());
+        {
+            let s = self.inner.read().await;
+            if let Some(s) = s.as_ref() {
+                if s.alive.load(Ordering::SeqCst) {
+                    return Ok(s.clone());
+                }
+            }
+        }
+        // 单飞：拿到 spawn 锁后二次确认（别的调用可能已在我们排队时拉起）
+        let _guard = self.spawn_lock.lock().await;
+        {
+            let s = self.inner.read().await;
+            if let Some(s) = s.as_ref() {
+                if s.alive.load(Ordering::SeqCst) {
+                    return Ok(s.clone());
+                }
             }
         }
         let s = spawn_sidecar(&self.launch).await?;
@@ -143,6 +160,10 @@ async fn spawn_sidecar(launch: &crate::paths::SidecarLaunch) -> Result<Arc<Sidec
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
+    // sidecar 的 python（exe 模式为 PyInstaller 内嵌解释器）stdout/stdin 编码在
+    // Windows 管道上默认随 locale（GBK）：应用名等非 ASCII 一写就变 GBK 字节，
+    // 宿主按 UTF-8 读必炸。源头强制 UTF-8。
+    cmd.env("PYTHONUTF8", "1").env("PYTHONIOENCODING", "utf-8");
     #[cfg(windows)]
     cmd.creation_flags(0x0800_0000);
 
@@ -177,14 +198,25 @@ async fn spawn_sidecar(launch: &crate::paths::SidecarLaunch) -> Result<Arc<Sidec
         }
     });
 
-    // stdout 读泵：分帧分发 response / event
+    // stdout 读泵：分帧分发 response / event。sidecar 存活的唯一可信信号 = 这条管道活着：
+    // alive 只在此处置 false；PyInstaller onefile 的 bootloader 可能先于子进程退出，
+    // wait() 返回 ≠ 管道死（此前在此误判 "sidecar 已退出"，孤儿子进程变僵尸）。
     {
         let pending = pending.clone();
         let events_tx = events_tx.clone();
         let alive = alive.clone();
         tokio::spawn(async move {
             let mut reader = BufReader::new(stdout).lines();
-            while let Ok(Some(line)) = reader.next_line().await {
+            loop {
+                let line = match reader.next_line().await {
+                    Ok(Some(l)) => l,
+                    Ok(None) => break,
+                    // 单行解码/IO 错误不终止事件管线（取证数据 > 完美主义）：记日志丢行
+                    Err(e) => {
+                        tracing::warn!("[通道B] stdout 读行错误（丢行继续）：{e}");
+                        continue;
+                    }
+                };
                 let v: Value = match serde_json::from_str(&line) {
                     Ok(v) => v,
                     Err(_) => continue,
@@ -229,20 +261,17 @@ async fn spawn_sidecar(launch: &crate::paths::SidecarLaunch) -> Result<Arc<Sidec
         }
     });
 
-    // 退出看护：wait() 归收子进程句柄并标记死亡
+    // 退出看护：wait() 只归收子进程句柄（僵尸回收），不宣告死亡
     let child = Arc::new(Mutex::new(Some(child)));
     {
         let child = child.clone();
-        let alive = alive.clone();
-        let pending_watch = pending.clone();
         tokio::spawn(async move {
             let mut slot = child.lock().await;
             if let Some(mut c) = slot.take() {
                 let _ = c.wait().await;
             }
-            alive.store(false, Ordering::SeqCst);
-            // wait() 归收后兜底 drain（读循环通常先做；fail_all 幂等）
-            pending_watch.fail_all("sidecar 已退出").await;
+            // 只归收僵尸、不宣告死亡：alive 的唯一权威是 stdout 读泵（管道 EOF）。
+            // PyInstaller onefile 的 bootloader 可能先退，wait() 返回时子进程仍在服务。
         });
     }
 

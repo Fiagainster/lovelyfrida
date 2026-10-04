@@ -16,6 +16,16 @@ import threading
 
 import frida
 
+# stdio 编码钉死 UTF-8：Windows 管道下 Python 默认随 locale（GBK），进程名/应用名
+# 一含非 ASCII 就输出 GBK 字节，宿主按 UTF-8 读行会解码失败。PyInstaller onefile
+# 的 bootloader 会清洗 PYTHON* 环境变量（PYTHONUTF8 传不进来），必须源头上钉死。
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stdin.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:  # noqa: BLE001  老版本 Python 无 reconfigure 时按原样运行
+    pass
+
 OUT = queue.Queue()
 DEVICE_LOCK = threading.Lock()
 DEVICES = {}   # key "host:port" → frida Device

@@ -273,21 +273,36 @@ pub fn reconstruct(samples: &[Sample]) -> ReconstructResult {
     let s0 = &samples[0];
     let mut all_candidates: Vec<Scheme> = Vec::new();
 
+    // 组合并行扫描：27 个 (family×concat×salt_form) 组合各自独立（每个最坏 2×MAX_ITER
+    // 次哈希迭代，串行最长约 5~10 分钟——UI 的「最长约几分钟」即此）。多核并行后总耗时
+    // 收敛为单个组合的耗时；按提交顺序 join，候选列表顺序与串行版完全一致。
+    type ComboHits = Vec<(Family, Concat, SaltForm, ChainInput, u64, &'static str)>;
+    let mut handles: Vec<std::thread::JoinHandle<ComboHits>> = Vec::new();
     for family in [Family::Sha256, Family::Sha1, Family::Md5] {
         for concat in [Concat::PwSalt, Concat::SaltPw, Concat::PwOnly] {
             for salt_form in [SaltForm::RawText, SaltForm::B64Decoded, SaltForm::HexText] {
                 let salt_b = salt_bytes(&s0.salt, salt_form);
-                for (chain, iters, enc) in scan_combo(family, &s0.plaintext, &salt_b, concat, &s0.target, MAX_ITER) {
-                    all_candidates.push(Scheme {
-                        family: family_name(family).into(),
-                        concat: concat_name(concat).into(),
-                        salt_form: salt_form_name(salt_form).into(),
-                        chain_input: chain_name(chain).into(),
-                        iterations: iters,
-                        output_encoding: enc.into(),
-                    });
-                }
+                let plaintext = s0.plaintext.clone();
+                let target = s0.target.clone();
+                handles.push(std::thread::spawn(move || {
+                    scan_combo(family, &plaintext, &salt_b, concat, &target, MAX_ITER)
+                        .into_iter()
+                        .map(|(chain, iters, enc)| (family, concat, salt_form, chain, iters, enc))
+                        .collect::<Vec<_>>()
+                }));
             }
+        }
+    }
+    for h in handles {
+        for (family, concat, salt_form, chain, iters, enc) in h.join().unwrap_or_default() {
+            all_candidates.push(Scheme {
+                family: family_name(family).into(),
+                concat: concat_name(concat).into(),
+                salt_form: salt_form_name(salt_form).into(),
+                chain_input: chain_name(chain).into(),
+                iterations: iters,
+                output_encoding: enc.into(),
+            });
         }
     }
 

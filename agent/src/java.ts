@@ -260,6 +260,11 @@ function installOne(decl: ProbeDecl): void {
   });
 }
 
+function st_status_error(id: string, msg: string, results: { id: string; status: string; error: string | null }[]): void {
+  results.push({ id, status: "error", error: msg });
+  sendProbeEvent({ t: "probe_error", id, phase: "install", error: msg });
+}
+
 /**
  * 添加探针（声明式 → 运行时挂钩）。
  * 三态上报（P-06）：类未加载 → waiting（延迟重试，P-05/17.x 时序）；成功 → active；异常 → error。
@@ -270,6 +275,16 @@ export function addProbes(decls: ProbeDecl[]): {
   const results: { id: string; status: string; error: string | null }[] = [];
   performSync(() => {
     for (const decl of decls) {
+      // 同方法位互斥：ov.implementation 是「替换」语义——同一 clazz.method 挂第二个探针
+      // 会静默顶掉第一个的 wrapper（联调实测：先挂者 hits 恒 0）。一个方法位只允许一个探针。
+      const dup = [...probes.entries()].find(
+        ([, s]) => s.status === "active" && s.decl.clazz === decl.clazz && s.decl.method === decl.method,
+      );
+      if (dup) {
+        const msg = `同方法位已有探针 #${dup[0]}（implementation 为替换语义，一个 clazz.method 只挂一个探针）：请先移除 #${dup[0]} 再挂`;
+        st_status_error(decl.id, msg, results);
+        continue;
+      }
       const st: ProbeState = {
         decl,
         hits: 0,

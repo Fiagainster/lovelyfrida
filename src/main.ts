@@ -16,7 +16,12 @@ function showFatal(origin: string, detail: unknown) {
   document.body.appendChild(el);
 }
 
-window.addEventListener("error", (e) => showFatal("window.error", e.error ?? e.message));
+// ResizeObserver 循环限流是浏览器良性噪声（布局抖动一轮未送达），不是应用错误：
+// 弹 fatal 条会把用户吓到（联调实测在台账/时间轴滚动时偶发）
+window.addEventListener("error", (e) => {
+  if (e.message?.includes("ResizeObserver loop")) return;
+  showFatal("window.error", e.error ?? e.message);
+});
 window.addEventListener("unhandledrejection", (e) => showFatal("unhandledrejection", e.reason));
 
 const app = createApp(App);
