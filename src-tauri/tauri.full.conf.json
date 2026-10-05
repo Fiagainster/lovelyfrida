@@ -9,7 +9,7 @@
       "../bin/frida-server/17.19.0/android-arm64/frida-server",
       "../bin/frida-server/17.19.0/android-x86/frida-server",
       "../bin/frida-server/17.19.0/android-x86_64/frida-server",
-      "../sidecar/dist/frida_bridge.exe"
+      "../sidecar/frida_bridge.exe"
     ]
   }
 }

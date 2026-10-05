@@ -42,6 +42,7 @@ src-tauri/gen/
 
 # sidecar 打包产物（构建脚本产出，不入库）
 sidecar/dist/
+sidecar/frida_bridge.exe
 build/
 
 # ===== 联调临时产物（批次七） =====

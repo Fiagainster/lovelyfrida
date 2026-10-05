@@ -39,7 +39,7 @@
       "../bin/adb/windows-x64/AdbWinApi.dll",
       "../bin/adb/windows-x64/AdbWinUsbApi.dll",
       "../bin/binary_manifest.json",
-      "../sidecar/dist/frida_bridge.exe"
+      "../sidecar/frida_bridge.exe"
     ]
   }
 }

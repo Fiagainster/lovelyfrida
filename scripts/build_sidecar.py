@@ -1,4 +1,5 @@
-"""通道B sidecar 打包（文档10 P4-1）：PyInstaller onefile 产出 sidecar/dist/frida_bridge.exe。
+"""通道B sidecar 打包（文档10 P4-1）：PyInstaller onefile 产出 sidecar/dist/frida_bridge.exe
+并拍平复制为 sidecar/frida_bridge.exe（tauri resources 引用拍平路径，见批次⑧出货级修复）。
 
 用途：单安装包分发的零外部依赖目标——sidecar 捆绑 Python + frida 客户端，
 安装后无需系统 Python / pip install frida（通道C 仍可选 frida CLI）。
@@ -73,7 +74,13 @@ def main() -> int:
     if not out.is_file():
         print("[sidecar] 构建失败：未产出 frida_bridge.exe", file=sys.stderr)
         return 1
-    print(f"[sidecar] 完成：{out}（{out.stat().st_size / 1024 / 1024:.1f} MB）")
+    # 拍平复制到 sidecar/frida_bridge.exe：tauri resources 用 ../sidecar/frida_bridge.exe，
+    # 安装后落在 _up_/sidecar/frida_bridge.exe，resource_join("sidecar/frida_bridge.exe")
+    # 的两级定位才能命中（dist 子目录会让安装版永远找不到 sidecar exe——批次⑧出货级修复）
+    import shutil
+    flat = ROOT / "sidecar" / "frida_bridge.exe"
+    shutil.copy2(out, flat)
+    print(f"[sidecar] 完成：{out} → {flat}（{out.stat().st_size / 1024 / 1024:.1f} MB）")
     return 0
 
 
