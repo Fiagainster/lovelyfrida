@@ -27,6 +27,19 @@ const form = reactive({
 });
 const needSession = computed(() => session.session?.phase !== "running");
 
+// 静态符号导入（D6/B3）：粘贴区文本 + 导入
+const symbolsText = ref("");
+
+function onImportSymbols() {
+  const added = probe.importSymbols(symbolsText.value);
+  if (added > 0) {
+    message.success(`已导入 ${added} 个静态符号候选（按案件保存）`);
+    symbolsText.value = "";
+  } else {
+    message.warning("没有可导入的符号（格式：每行 com.example.Cls.method，或 JSON 数组）");
+  }
+}
+
 function fillTemplate(clazz: string, method: string) {
   form.clazz = clazz;
   form.method = method;
@@ -230,6 +243,41 @@ function statusLight(s: ProbeStat["status"]) {
         <NButton size="tiny" quaternary @click="fillTemplate('javax.crypto.spec.SecretKeySpec', '$init')">密钥生成 SecretKeySpec</NButton>
         <NButton size="tiny" quaternary @click="fillTemplate('net.zetetic.database.sqlcipher.SQLiteDatabase', '$init')">SQLCipher 开库</NButton>
         <NButton size="tiny" quaternary @click="fillTemplate('java.net.URL', '$init')">URL 访问</NButton>
+      </div>
+
+      <!-- 静态符号候选（D6/B3 落地半边）：jadx 等静态工具的产物直接导入为候选 -->
+      <div style="margin-top: 14px; border-top: 1px dashed var(--border-1); padding-top: 10px">
+        <div class="connect-row" style="align-items: flex-start">
+          <span class="muted" style="font-size: 11px; white-space: nowrap">静态符号：</span>
+          <NInput
+            v-model:value="symbolsText"
+            type="textarea"
+            size="small"
+            :rows="3"
+            placeholder="粘贴 jadx 等静态分析产物，每行一个：com.example.Crypto.method（或 JSON 数组 [{clazz, method}]）"
+            style="flex: 1"
+          />
+        </div>
+        <div class="connect-row" style="margin-top: 6px">
+          <NButton size="tiny" secondary @click="onImportSymbols">导入为候选</NButton>
+          <span class="muted" style="font-size: 11px">按案件保存 · 点候选名预填表单</span>
+        </div>
+        <div v-if="probe.staticSymbols.length" style="margin-top: 6px; max-height: 140px; overflow: auto">
+          <div
+            v-for="(s, i) in probe.staticSymbols"
+            :key="`${s.clazz}#${s.method}`"
+            class="connect-row"
+            style="gap: 6px; padding: 2px 0"
+          >
+            <a
+              class="mono"
+              style="font-size: 11px; cursor: pointer; flex: 1; word-break: break-all"
+              :title="'点击预填表单'"
+              @click="fillTemplate(s.clazz, s.method)"
+            >{{ s.clazz }}.<b>{{ s.method }}</b></a>
+            <NButton size="tiny" quaternary type="warning" @click="probe.removeSymbol(i)">删</NButton>
+          </div>
+        </div>
       </div>
 
       <h3 style="margin-top: 18px">已挂探针（{{ probe.probes.length }}）</h3>

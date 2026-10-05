@@ -1,7 +1,9 @@
 import { defineStore } from "pinia";
-import { ref, shallowRef } from "vue";
+import { computed, ref, shallowRef } from "vue";
 import { api, type ProbeDecl, type ProbeStat, type TraceRecord } from "@/api";
 import { useDiagStore } from "@/stores/diagnostics";
+import { useCaseStore } from "@/stores/case";
+import { parseSymbols, type StaticSymbol } from "@/utils/symbols";
 
 /** trace 内存环上限（O-02；全量落 cases/traces/*.jsonl，库内只存索引） */
 export const TRACE_CAP = 3000;
@@ -24,6 +26,50 @@ export const useProbeStore = defineStore("probe", () => {
 
   // bindEvents 重入门（dev HMR 重跑 setup 会重复注册 Tauri 监听）
   let bound = false;
+
+  // ---------- 静态符号候选（D6/B3 落地半边） ----------
+  // jadx 等静态工具导出的目标方法清单 → 探针候选（一键预填）。按案件分桶 localStorage 持久化。
+  const SYMBOLS_KEY = "lovelyfrida.staticSymbols";
+  const symbolsByCase = ref<Record<string, StaticSymbol[]>>(loadSymbols());
+
+  function loadSymbols(): Record<string, StaticSymbol[]> {
+    try {
+      const raw = localStorage.getItem(SYMBOLS_KEY);
+      return raw ? (JSON.parse(raw) as Record<string, StaticSymbol[]>) : {};
+    } catch {
+      return {};
+    }
+  }
+
+  /** 当前案件的静态符号候选（案件名来自 case 单一真源） */
+  const staticSymbols = computed<StaticSymbol[]>(
+    () => symbolsByCase.value[useCaseStore().apiCaseName()] ?? [],
+  );
+
+  function persistSymbols() {
+    localStorage.setItem(SYMBOLS_KEY, JSON.stringify(symbolsByCase.value));
+  }
+
+  /** 导入静态符号文本（点号行 / JSON 数组），返回新增条数（与已有去重） */
+  function importSymbols(text: string): number {
+    const parsed = parseSymbols(text);
+    if (!parsed.length) return 0;
+    const k = useCaseStore().apiCaseName();
+    const existing = symbolsByCase.value[k] ?? [];
+    const seen = new Set(existing.map((s) => `${s.clazz}#${s.method}`));
+    const merged = [...existing, ...parsed.filter((s) => !seen.has(`${s.clazz}#${s.method}`))];
+    symbolsByCase.value = { ...symbolsByCase.value, [k]: merged };
+    persistSymbols();
+    return merged.length - existing.length;
+  }
+
+  function removeSymbol(index: number) {
+    const k = useCaseStore().apiCaseName();
+    const list = [...(symbolsByCase.value[k] ?? [])];
+    list.splice(index, 1);
+    symbolsByCase.value = { ...symbolsByCase.value, [k]: list };
+    persistSymbols();
+  }
 
   // ---------- RPC ----------
   async function rpc<T>(f: string, args: unknown[]): Promise<T> {
@@ -151,10 +197,13 @@ export const useProbeStore = defineStore("probe", () => {
     adding,
     rpcError,
     trace,
+    staticSymbols,
     rpc,
     addProbe,
     removeProbe,
     refreshStats,
+    importSymbols,
+    removeSymbol,
     pushTrace,
     ingestTrace,
     flushTrace,
