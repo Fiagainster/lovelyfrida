@@ -70,6 +70,8 @@ cd src-tauri && cargo check
 - **首次克隆后先构建 agent**（`cd agent && npm install && npm run build`）：`agent/dist/core.js` 是 gitignore 的本地构建产物，Rust 侧 `include_str!` 编译期依赖它（CI 已按此顺序固化）。
 - **真机联调/验收脚本**（需 MuMu 运行、root、frida-server 在位）：
   `python scripts/it_layer1_sidecar.py com.notevault.app <host_port>`（协议层 18 项）；
+  `python scripts/it_stress_events.py`（O-02 压测：30000 事件双阶段，
+  批量路径 5022 事件/s 达标、未批量对照基线）；
   `python scripts/it_layer2_gui.py`（CDP 驱动真实 UI 全业务链，需以
   `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--remote-debugging-port=9223 --remote-allow-origins=*"` 启动应用）。
   注意：混用不同版本的 adb CLI 与应用会触发 E-01/E-04 server 乒乓（详见 docs/10 阶段⑤坑位记录）。
