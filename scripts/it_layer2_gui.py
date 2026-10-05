@@ -166,7 +166,7 @@ def main():
     d = _json.loads(doctor) if isinstance(doctor, str) and doctor.startswith('{') else {"fails": 99, "overall": str(doctor), "dur": "?"}
     check("体检完成且 0 失败（并行化耗时可见）", d.get("fails") == 0 and d.get("overall") in ("pass", "warn"),
           f"overall={d.get('overall')} 失败项={d.get('fails')} 总耗时={d.get('dur')}s")
-    c1btn = str(js("""(() => [...document.querySelectorAll('button')].filter(b => b.innerText.includes('下载 frida-server')).length)"""))
+    c1btn = str(js("""(() => [...document.querySelectorAll('button')].filter(b => b.innerText.includes('下载 frida-server')).length)()"""))
     check("C1 下载按钮不出现（CHK-08 一致 → 无需下载）", c1btn == "0", c1btn)
     shot("it_01_doctor")
 
@@ -179,7 +179,7 @@ def main():
 
     print("== 3. 装载节点：安装链（frida-server 未运行则走 GUI 安装链）+ 附加 notevault ==")
     node(2)
-    listening = js("""(() => document.body.innerText.includes('实测监听中') ? 'yes' : 'no')""")
+    listening = js("""(() => document.body.innerText.includes('实测监听中') ? 'yes' : 'no')())""")
     if listening != "yes":
         print("   frida-server 未监听 → 点「安装并启动（推送匹配版）」")
         click_button("安装并启动")
@@ -188,7 +188,7 @@ def main():
         js("""(() => { const b = [...document.querySelectorAll('button')].find(x => x.innerText.trim() === '刷新'); if (b) b.click(); return 'ok'; })()""")
     wait(r"""(() => document.body.innerText.includes('实测监听中') ? 'yes' : false)()""", 30, "serverStatus 刷新出实测监听")
     check("frida-server 实测监听（S-05 假绿灯防护后）",
-          js("""(() => document.body.innerText.includes('实测监听中') ? 'yes' : 'no')""") == "yes")
+          js("""(() => document.body.innerText.includes('实测监听中') ? 'yes' : 'no')()""") == "yes")
     click_button("枚举进程")
     wait(r"""(() => { const m = document.body.innerText.match(/共 (\d+) 条/); return m ? Number(m[1]) >= 1 : false; })()""",
          90, "进程枚举")
