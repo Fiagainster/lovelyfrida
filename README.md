@@ -84,10 +84,11 @@ cd src-tauri && cargo check
 
 ```bash
 python scripts/build_sidecar.py   # ① 通道B sidecar exe（PyInstaller onefile，捆绑 frida 客户端）
-npx tauri build                   # ② NSIS 安装包（随包 adb / frida-server 四 ABI 矩阵 / sidecar exe）
+npx tauri build                   # ② NSIS 安装包（默认瘦身：随包 adb + sidecar，约 40MB）
 ```
 
-**瘦身构建（C1 可选）**：`npx tauri build --config src-tauri/tauri.slim.conf.json`——安装包不随包 frida-server 矩阵（约 250MB → ~40MB），首启后用体检页「下载 frida-server」按钮按 manifest 登记的 sha256 对账下载到工作区。代价是首启需要网络；默认构建仍保持「零外部依赖」。
+**分发形态（C1，2026-10 拍板：默认瘦身）**：默认安装包**不随包 frida-server 矩阵**；首启后用体检页「下载 frida-server」按钮按 binary_manifest.json 登记的 sha256 对账下载到工作区（**首启需网络**，之后全功能离线）。需要「零联网、全量随包」的交付场景用：
+`npx tauri build --config src-tauri/tauri.full.conf.json`（约 250MB，四 ABI 矩阵全随包）。FR-02 首启对账对按需模式有明确容错（矩阵目录整体缺失时记「按需下载模式」而非失败）。
 
 产物：`src-tauri/target/release/bundle/nsis/LovelyFrida_0.2.0_x64-setup.exe`。
 安装后**零外部依赖**：adb 随包；frida-server 按设备 ABI 在运行时自动推送（S-01 版本矩阵一致）；通道B sidecar 为内置 exe（捆绑 Python + frida），开发态没有 exe 时自动回退 `python -u sidecar/frida_bridge.py`（需 `pip install frida`）。首启自检 FR-07 会明示当前 sidecar 启动方式。仅 frida 相关依赖在运行时由工具自行配置——这正是设计目标。
