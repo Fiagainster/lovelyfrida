@@ -98,11 +98,13 @@ def click_button(text, scope=""):
 
 
 def fill_input(placeholder_part, value):
-    return js(rf"""(() => {{
-      const inp = [...document.querySelectorAll('input')].find(i => (i.placeholder || '').includes('{placeholder_part}'));
+    # value 经 JSON 编码注入：任意内容（含引号/换行）都是合法 JS 字符串字面量
+    v = json.dumps(value, ensure_ascii=False)
+    return js(f"""(() => {{
+      const inp = [...document.querySelectorAll('input')].find(i => (i.placeholder || '').includes({json.dumps(placeholder_part)}));
       if (!inp) return 'missing';
       const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-      setter.call(inp, '{value}');
+      setter.call(inp, {v});
       inp.dispatchEvent(new Event('input', {{ bubbles: true }}));
       return 'filled';
     }})()""")

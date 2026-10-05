@@ -5,6 +5,7 @@
  */
 import Java from "frida-java-bridge";
 import { encodeValue, EncValue } from "./value";
+import { emitEvent } from "./batch";
 import {
   addProbes,
   chooseInstances,
@@ -95,6 +96,7 @@ interface RpcExports {
   unwatchSsl(q: { id: string }): unknown;
   sslStats(): unknown;
   chooseDetailed(q: { className: string; limit: number }): unknown;
+  stressFire(q: { n: number; tag?: string }): unknown;
   invokeInstance(q: { className: string; hashCode: number; methodName: string; args: string[] }): unknown;
 }
 
@@ -125,6 +127,14 @@ const api: RpcExports = {
   unwatchSsl: (q) => unwatchSsl(q.id),
   sslStats: () => sslStats(),
   chooseDetailed: (q) => chooseInstancesDetailed(q.className, q.limit),
+  // 联调仪器（O-02）：直调批量层打 n 条合成 probe_hit，测真实批量路径吞吐
+  stressFire: (q) => {
+    const n = Math.max(1, Math.min(Number(q.n) || 0, 200000));
+    for (let i = 0; i < n; i++) {
+      emitEvent({ t: "probe_hit", id: q.tag || "stress", clazz: "stress.Bench", method: "fire", ts: Date.now(), thread: Process.getCurrentThreadId(), args: [{ k: "str", v: "stress-" + i }] });
+    }
+    return { fired: n };
+  },
   invokeInstance: (q) => invokeOnInstance(q.className, q.hashCode, q.methodName, q.args),
 };
 
