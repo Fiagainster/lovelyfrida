@@ -1,4 +1,4 @@
-# LovelyFrida 安装包签名（文档10 C2 脚手架）
+﻿# LovelyFrida 安装包签名（文档10 C2 脚手架）
 # 用法：python scripts\build_sidecar.py && npx tauri build 之后——
 #   powershell -ExecutionPolicy Bypass -File scripts\sign_installer.ps1 <安装包或exe 路径>
 #

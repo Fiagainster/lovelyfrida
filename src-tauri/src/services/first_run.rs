@@ -158,7 +158,6 @@ async fn check_sidecar() -> FirstRunItem {
 async fn check_binary_hashes() -> FirstRunItem {
     use sha2::{Digest, Sha256};
     let manifest_path = crate::paths::resource_join("bin/binary_manifest.json");
-    let bin_base = crate::paths::resource_join("bin");
 
     if !manifest_path.exists() {
         return FirstRunItem {
@@ -199,7 +198,10 @@ async fn check_binary_hashes() -> FirstRunItem {
         ) else {
             continue;
         };
-        let p = bin_base.join(rel);
+        // 逐条用完整相对路径 resource_join：不能用 resource_join("bin") 作基目录再 join——
+        // 安装布局下资源在 _up_/bin，而 ensure_layout 的空 root/bin 会遮蔽基目录兜底
+        // （批次⑧出货闭环实测：adb 三条被误判缺失）
+        let p = crate::paths::resource_join(&format!("bin/{rel}"));
         if !p.exists() {
             // C1 按需模式（瘦身构建）：frida-server 未随包且矩阵目录整体缺失时，
             // 缺文件是预期而非事故——不算对账失败，提示走按需下载
