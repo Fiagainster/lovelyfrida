@@ -205,7 +205,13 @@ async fn check_binary_hashes() -> FirstRunItem {
         if !p.exists() {
             // C1 按需模式（瘦身构建）：frida-server 未随包且矩阵目录整体缺失时，
             // 缺文件是预期而非事故——不算对账失败，提示走按需下载
-            if rel.starts_with("frida-server/") && !crate::paths::frida_server_matrix_dir().exists() {
+            // 判空而非判存在：ensure_layout 会预创建空的 bin/frida-server，
+            // exists() 恒真会让按需容错永不触发（批次⑧出货闭环实测）
+            let matrix_empty = crate::paths::frida_server_matrix_dir()
+                .read_dir()
+                .map(|mut d| d.next().is_none())
+                .unwrap_or(true);
+            if rel.starts_with("frida-server/") && matrix_empty {
                 ondemand_skipped.push(rel.to_string());
                 continue;
             }
