@@ -9,6 +9,9 @@ import Java from "frida-java-bridge";
 import { compileCondition } from "./condition";
 import { emitEvent } from "./batch";
 import { encodeValue, EncValue } from "./value";
+import { decideInstallError, findMethodSlotConflict, type ProbeDecl, type ProbeState } from "./probe_registry";
+
+export type { ProbeDecl, ProbeState } from "./probe_registry";
 
 export function javaAvailable(): boolean {
   try {
@@ -174,28 +177,7 @@ export function chooseInstances(className: string, limit: number): Promise<{
 }
 
 // ---------------- 探针注册表（hooks） ----------------
-
-export interface ProbeDecl {
-  id: string;
-  clazz: string;
-  method: string; // "$init" 表示构造函数
-  maxLen?: number;
-  captureRet?: boolean;
-  backtrace?: boolean;
-  /** 可选条件表达式（js，变量 this_ = 调用对象、arguments = 参数数组，返回 truthy 才上报） */
-  condition?: string;
-}
-
-interface ProbeState {
-  decl: ProbeDecl;
-  hits: number;
-  errors: number;
-  status: "waiting" | "active" | "error";
-  lastError: string | null;
-  installedAtLoader: string | null;
-  /** 安装期一次性编译的条件函数（编译失败 = 探针 error，不带病挂载） */
-  condFn: ((this_: unknown, args: unknown[]) => unknown) | null;
-}
+// ProbeDecl/ProbeState 与互斥/重试纯逻辑见 probe_registry.ts（可单测）
 
 export const probes = new Map<string, ProbeState>();
 
@@ -276,13 +258,12 @@ export function addProbes(decls: ProbeDecl[]): {
   const results: { id: string; status: string; error: string | null }[] = [];
   performSync(() => {
     for (const decl of decls) {
-      // 同方法位互斥：ov.implementation 是「替换」语义——同一 clazz.method 挂第二个探针
-      // 会静默顶掉第一个的 wrapper（联调实测：先挂者 hits 恒 0）。一个方法位只允许一个探针。
-      const dup = [...probes.entries()].find(
-        ([, s]) => s.status === "active" && s.decl.clazz === decl.clazz && s.decl.method === decl.method,
-      );
-      if (dup) {
-        const msg = `同方法位已有探针 #${dup[0]}（implementation 为替换语义，一个 clazz.method 只挂一个探针）：请先移除 #${dup[0]} 再挂`;
+      // 同方法位互斥（probe_registry.findMethodSlotConflict）：ov.implementation 是「替换」
+      // 语义——同一 clazz.method 挂第二个探针会静默顶掉第一个的 wrapper（联调实测：先挂者
+      // hits 恒 0）。waiting 也占用方法位，否则两个探针的重试竞态会复现同型事故（批次⑩）。
+      const dupId = findMethodSlotConflict(probes, decl);
+      if (dupId !== null) {
+        const msg = `同方法位已有探针 #${dupId}（implementation 为替换语义，一个 clazz.method 只挂一个探针，重试中的 waiting 同样占用）：请先移除 #${dupId} 再挂`;
         st_status_error(decl.id, msg, results);
         continue;
       }
@@ -326,10 +307,10 @@ export function addProbes(decls: ProbeDecl[]): {
           }
         } catch (e) {
           const msg = String(e);
-          const classMissing = msg.includes("ClassNotFoundException") || msg.includes("java.lang.Class");
-          if (classMissing && retry < 5) {
+          const decision = decideInstallError(msg, retry);
+          if (decision.kind === "retry") {
             // P-05/17.x 时序：类还没加载，延迟重试
-            setTimeout(() => attempt(retry + 1), 1500 * (retry + 1));
+            setTimeout(() => attempt(retry + 1), decision.delayMs);
             return;
           }
           st.status = "error";
