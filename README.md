@@ -25,7 +25,7 @@
 | 层 | 选型 |
 |---|---|
 | 应用外壳 | Tauri 2.x（单 exe 分发、Rust 后端进程控制） |
-| 前端 | Vue 3 + Vite + TypeScript + Pinia + Naive UI，编辑器 Monaco、终端 xterm.js、图表 ECharts |
+| 前端 | Vue 3 + Vite + TypeScript + Pinia + Naive UI；终端 xterm.js（编辑用 NInput textarea、时间轴用 NDataTable 虚拟滚动替代 Monaco/ECharts 这类重组件——按需只留 xterm） |
 | 后端 | Rust（tokio 多线程），rusqlite(bundled)、tracing、portable-pty（M1） |
 | Frida 对接 | **三通道**：A=Rust frida crate（远期）/ **B=sidecar JSON-RPC over stdio（主通道；打包态为内置 frida_bridge.exe，开发态回退 python）** / C=frida CLI 兜底（观测级降级，RPC 类操作明确报错）；auto 先 B、B 不可用降级 C，当前通道 UI 必须明示；结构化数据一律 agent `send()` JSON 回传，宿主不解析控制台文本 |
 | Agent | 注入进程的常驻 JS（M1 握手；M2 按已批准的 [09 扩展方案](docs/09-通用调试工作台扩展.md) 升级为通用调试底座 + instruments） |

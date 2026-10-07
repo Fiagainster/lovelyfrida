@@ -1,6 +1,7 @@
-# LovelyFrida CI（docs/10 附二 C3）：
-# - test：每次 push/PR 跑前端测试/类型检查 + agent 构建 + cargo check/test（windows：后端是 Win 专属路径）
-# - build：打 v* tag 时跑两步构建（sidecar exe + NSIS 安装包），按 manifest 供给随包二进制并对账 sha256
+# LovelyFrida CI（docs/10 附二 C3 + 批次⑬）：
+# - test：每次 push/PR 跑 lint（eslint + cargo fmt/clippy）+ 前端测试/类型检查 + agent 构建 + cargo check/test（windows：后端是 Win 专属路径）
+# - build：打 v* tag 时跑两步构建（sidecar exe + NSIS 安装包），按 manifest 供给随包二进制并对账 sha256，
+#   并创建 GitHub Release（安装包 + sha256 清单）——C3 的「tag 触发 release」自此完整兑现
 name: CI
 
 on:
@@ -16,6 +17,7 @@ concurrency:
 jobs:
   test:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -25,6 +27,8 @@ jobs:
           cache: npm
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -38,15 +42,18 @@ jobs:
           npm test
           npm run build
 
-      - name: 前端测试 + 类型检查 + 构建
+      - name: 前端 lint + 测试 + 类型检查 + 构建
         run: |
           npm ci
+          npm run lint
           npm test
           npm run build
 
-      - name: Rust 检查 + 测试
+      - name: Rust lint + 检查 + 测试
         working-directory: src-tauri
         run: |
+          cargo fmt --check
+          cargo clippy --lib -- -D warnings
           cargo check
           cargo test
 
@@ -54,6 +61,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: test
     runs-on: windows-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -75,12 +83,8 @@ jobs:
       - name: 按 manifest 供给随包二进制（sha256 对账，S-01 供应链）
         run: python scripts/ci_provision_binaries.py
 
-      - name: 安装 sidecar 构建依赖（frida 版本必须与矩阵一致，S-01）
-        shell: bash
-        run: |
-          FRIDA_VERSION=$(python -c "import json;print(next(e['version'] for e in json.load(open('bin/binary_manifest.json'))['files'] if e.get('name')=='frida-server'))")
-          echo "frida client = $FRIDA_VERSION"
-          pip install "frida==$FRIDA_VERSION" pyinstaller
+      - name: 安装 sidecar 构建依赖（sidecar/requirements.txt 锁定，S-01 矩阵一致性由 build_sidecar 自检兜底）
+        run: pip install -r sidecar/requirements.txt
 
       - name: agent 构建
         working-directory: agent
@@ -101,9 +105,26 @@ jobs:
       - name: ② NSIS 安装包
         run: npx tauri build
 
-      - name: 上传安装包产物
+      - name: 生成 sha256 清单
+        shell: bash
+        run: |
+          cd src-tauri/target/release/bundle/nsis
+          sha256sum *.exe > sha256sums.txt
+          cat sha256sums.txt
+
+      - name: 上传安装包产物（artifact 保留 90 天，正式分发用 Release）
         uses: actions/upload-artifact@v4
         with:
           name: installer
           path: src-tauri/target/release/bundle/nsis/*.exe
           if-no-files-found: error
+
+      - name: 创建 GitHub Release（安装包 + sha256 清单；C3 完整兑现）
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/nsis/sha256sums.txt
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
