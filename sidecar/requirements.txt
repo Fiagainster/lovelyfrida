@@ -1,0 +1,6 @@
+# 通道B sidecar 构建依赖（批次⑬：声明式锁定——此前 frida 版本只靠构建机全局环境，
+# 版本对齐仅靠 build_sidecar.py 构建时一次性自检）
+# 纪律：frida 版本必须与 bin/frida-server/<版本> 随包矩阵一致（S-01 三处一致）；
+# 升级时同步更新 bin/binary_manifest.json 的 frida-server 版本与本文件。
+frida==17.19.0
+pyinstaller==6.22.3

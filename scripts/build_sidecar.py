@@ -66,6 +66,17 @@ def main() -> int:
             "--specpath", str(SPEC),
             # stdio JSON-RPC 是通道B 传输层：必须保留控制台
             "--console",
+            # 体积瘦身（批次⑬）：sidecar 只用 stdlib + frida + concurrent.futures，
+            # 这些标准库/随 pip 附带的模块永远用不到，剔除后 onefile 解压更快
+            # （懒启动场景解压延迟直接计入用户首次操作）。注意不可剔
+            # concurrent.futures（批次⑩起 frida_bridge.py 的工作池依赖它）。
+            "--exclude-module", "tkinter",
+            "--exclude-module", "unittest",
+            "--exclude-module", "pydoc_data",
+            "--exclude-module", "lib2to3",
+            "--exclude-module", "setuptools",
+            "--exclude-module", "distutils",
+            "--exclude-module", "xmlrpc",
             "--clean",
             "--noconfirm",
         ]
