@@ -42,6 +42,7 @@ hex = "0.4"
 # C1 按需下载：manifest 驱动的 frida-server 供给（sha256 对账 + xz 解压）
 ureq = { version = "2", default-features = false, features = ["tls"] }
 lzma-rs = "0.3"
+# TODO 批次⑮待办：fs2 上游停更，换 fs4（同 API：available_space）；本轮 crates.io 网络不通暂缓
 
 [profile.release]
 lto = true

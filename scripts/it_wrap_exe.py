@@ -1,6 +1,10 @@
 import subprocess, sys, threading, time, os
-EXE = r"D:\Project\lovelyfrida\sidecar\dist\frida_bridge.exe"
-LOGP = r"D:\Project\lovelyfrida\logs\wrapper\relay.log"
+from pathlib import Path
+# 批次⑭：路径改为相对仓库根（此前硬编码绝对路径，换机器即失效）
+ROOT = Path(__file__).resolve().parent.parent
+EXE = str(ROOT / "sidecar" / "dist" / "frida_bridge.exe")
+LOGP = str(ROOT / "logs" / "wrapper" / "relay.log")
+Path(LOGP).parent.mkdir(parents=True, exist_ok=True)
 LOG = open(LOGP, "ab", buffering=0)
 def log(m):
     LOG.write((f"[{time.strftime('%H:%M:%S')}.{int(time.time()*1000)%1000:03d}] {m}\n").encode())
