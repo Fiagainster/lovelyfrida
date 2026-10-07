@@ -44,7 +44,10 @@ pub fn script_list() -> Result<Vec<ScriptInfo>, String> {
                 })
                 .unwrap_or_default();
             out.push(ScriptInfo {
-                name: p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(),
+                name: p
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default(),
                 size: meta.len(),
                 modified,
             });
@@ -76,7 +79,13 @@ pub fn script_save(name: &str, content: &str) -> Result<String, String> {
         crate::guard::snapshot_file(&p)?;
     }
     std::fs::write(&p, content).map_err(|e| e.to_string())?;
-    crate::audit::audit("script_save", &p.display().to_string(), "done", "script-library", &format!("{} bytes", content.len()));
+    crate::audit::audit(
+        "script_save",
+        &p.display().to_string(),
+        "done",
+        "script-library",
+        &format!("{} bytes", content.len()),
+    );
     Ok(p.display().to_string())
 }
 
@@ -120,7 +129,6 @@ fn db() -> Result<Connection, String> {
     crate::store::open_db()
 }
 
-
 pub fn profile_save(
     case_name: &str,
     id: Option<i64>,
@@ -156,7 +164,13 @@ pub fn profile_save(
         )
         .map_err(|e| e.to_string())?;
         let id = conn.last_insert_rowid();
-        crate::audit::audit("profile_create", package, "done", "profile-editor", case_name);
+        crate::audit::audit(
+            "profile_create",
+            package,
+            "done",
+            "profile-editor",
+            case_name,
+        );
         Ok(id)
     }
 }
@@ -186,8 +200,19 @@ pub fn profile_list(case_name: &str) -> Result<Vec<AppProfile>, String> {
         .map_err(|e| e.to_string())?;
     let mut out = Vec::new();
     for row in rows {
-        let (id, package, uid, apk_path, data_dirs, secret_files, secret_transform, entry_gesture, entry_coords, probe_targets, notes) =
-            row.map_err(|e| e.to_string())?;
+        let (
+            id,
+            package,
+            uid,
+            apk_path,
+            data_dirs,
+            secret_files,
+            secret_transform,
+            entry_gesture,
+            entry_coords,
+            probe_targets,
+            notes,
+        ) = row.map_err(|e| e.to_string())?;
         out.push(AppProfile {
             id,
             case_name: case_name.into(),
@@ -210,6 +235,12 @@ pub fn profile_delete(id: i64) -> Result<(), String> {
     let conn = db()?;
     conn.execute("DELETE FROM app_profiles WHERE id = ?1", [id])
         .map_err(|e| e.to_string())?;
-    crate::audit::audit("profile_delete", &id.to_string(), "done", "profile-editor", "");
+    crate::audit::audit(
+        "profile_delete",
+        &id.to_string(),
+        "done",
+        "profile-editor",
+        "",
+    );
     Ok(())
 }

@@ -137,7 +137,10 @@ pub fn parse_salt_form(s: &str) -> Option<SaltForm> {
 /// 方案语义下的盐字节：C 爆破器骨架与 Rust recompute 必须同源，
 /// 否则 B64Decoded/HexText 方案的骨架自测必挂
 pub fn scheme_salt_bytes(scheme: &Scheme, salt: &str) -> Vec<u8> {
-    salt_bytes(salt, parse_salt_form(&scheme.salt_form).unwrap_or(SaltForm::RawText))
+    salt_bytes(
+        salt,
+        parse_salt_form(&scheme.salt_form).unwrap_or(SaltForm::RawText),
+    )
 }
 
 /// 首轮输入（按拼接顺序）
@@ -324,20 +327,29 @@ pub fn reconstruct(samples: &[Sample]) -> ReconstructResult {
         .collect();
 
     if samples.len() > 1 && verified.is_empty() {
-        return empty_result("第一组命中但第二组样本未通过同一方案（假命中已排除）——请核对两组样本是否同源同算法");
+        return empty_result(
+            "第一组命中但第二组样本未通过同一方案（假命中已排除）——请核对两组样本是否同源同算法",
+        );
     }
 
     let scheme = verified[0].clone();
     let self_test = {
         // 自证：用方案重算两组样本逐字节一致
-        samples
-            .iter()
-            .all(|s| recompute(s, &scheme).map(|out| out.eq_ignore_ascii_case(&s.target)).unwrap_or(false))
+        samples.iter().all(|s| {
+            recompute(s, &scheme)
+                .map(|out| out.eq_ignore_ascii_case(&s.target))
+                .unwrap_or(false)
+        })
     };
 
     let human = format!(
         "存储值 = {}( {} )，{}，{}；迭代 {} 次；输出 {} 编码",
-        scheme.family, scheme.concat, scheme.salt_form, scheme.chain_input, scheme.iterations, scheme.output_encoding
+        scheme.family,
+        scheme.concat,
+        scheme.salt_form,
+        scheme.chain_input,
+        scheme.iterations,
+        scheme.output_encoding
     );
 
     // Python 验证骨架（文档04-F：规格书三件套之二）
@@ -447,7 +459,10 @@ mod tests {
         assert_eq!(s.output_encoding, "base64");
         assert_eq!(s.iterations, 1);
         assert!(r.self_test_passed);
-        assert!(r.hashcat_mode.is_some(), "单轮 SHA-256(pw‖salt) 应有 hashcat 1410");
+        assert!(
+            r.hashcat_mode.is_some(),
+            "单轮 SHA-256(pw‖salt) 应有 hashcat 1410"
+        );
         println!("APK-1 方案: {}", r.human_desc);
     }
 
@@ -473,28 +488,39 @@ mod tests {
         let target = hex::encode(&h);
 
         let samples = vec![
-            Sample { plaintext: pw.into(), salt: salt.into(), target: target.clone() },
+            Sample {
+                plaintext: pw.into(),
+                salt: salt.into(),
+                target: target.clone(),
+            },
             // 双样本防假命中：另一组同方案数据
-            Sample { plaintext: "Test9876".into(), salt: salt.into(), target: {
-                let mut inp = b"Test9876".to_vec();
-                inp.extend_from_slice(salt.as_bytes());
-                let mut hh = Sha256::new();
-                hh.update(&inp);
-                let mut hh2 = hh.finalize().to_vec();
-                for _ in 0..9999 {
-                    let input = hex::encode(&hh2).into_bytes();
-                    let mut h3 = Sha256::new();
-                    h3.update(&input);
-                    hh2 = h3.finalize().to_vec();
-                }
-                hex::encode(&hh2)
-            } },
+            Sample {
+                plaintext: "Test9876".into(),
+                salt: salt.into(),
+                target: {
+                    let mut inp = b"Test9876".to_vec();
+                    inp.extend_from_slice(salt.as_bytes());
+                    let mut hh = Sha256::new();
+                    hh.update(&inp);
+                    let mut hh2 = hh.finalize().to_vec();
+                    for _ in 0..9999 {
+                        let input = hex::encode(&hh2).into_bytes();
+                        let mut h3 = Sha256::new();
+                        h3.update(&input);
+                        hh2 = h3.finalize().to_vec();
+                    }
+                    hex::encode(&hh2)
+                },
+            },
         ];
         let r = reconstruct(&samples);
         assert!(r.error.is_none(), "error: {:?}", r.error);
         let s = r.scheme.unwrap();
         assert_eq!(s.family, "SHA-256");
-        assert_eq!(s.iterations, 10000, "迭代数必须精确到 10000（差 1 即错，writeup 的坑）");
+        assert_eq!(
+            s.iterations, 10000,
+            "迭代数必须精确到 10000（差 1 即错，writeup 的坑）"
+        );
         assert!(s.chain_input.contains("hex"), "链式输入应为连写 hex");
         assert_eq!(s.output_encoding, "hex");
         assert!(r.self_test_passed);

@@ -55,7 +55,9 @@ impl FridaChannelC {
     async fn wrapped_agent_path() -> Result<std::path::PathBuf, String> {
         let cfg = crate::config::get();
         let dir = crate::paths::workspace_root(&cfg);
-        tokio::fs::create_dir_all(&dir).await.map_err(|e| e.to_string())?;
+        tokio::fs::create_dir_all(&dir)
+            .await
+            .map_err(|e| e.to_string())?;
         let p = dir.join("_agent_c.js");
         let shim = format!(
             r#"// LovelyFrida 通道C send-shim（自动生成，勿手改）
@@ -188,7 +190,10 @@ impl FridaChannelC {
                 }
             });
         }
-        tracing::info!("[通道C] CLI 已附加（target={target}，script={}）", script_path.display());
+        tracing::info!(
+            "[通道C] CLI 已附加（target={target}，script={}）",
+            script_path.display()
+        );
         Ok(())
     }
 
@@ -206,11 +211,17 @@ impl FridaChannelC {
 fn forward_message(app: &tauri::AppHandle, payload: &serde_json::Value) {
     let trace: tauri::State<'_, Arc<crate::services::trace::TraceState>> = app.state();
     crate::services::trace::on_agent_message(app, &trace, payload, VIRTUAL_SCRIPT_ID, &None);
-    let _ = app.emit("frida-event", json!({"event": "message", "params": {"kind": "send", "payload": payload}}));
+    let _ = app.emit(
+        "frida-event",
+        json!({"event": "message", "params": {"kind": "send", "payload": payload}}),
+    );
 }
 
 /// `frida-ps -H host:port` 进程枚举解析（通道C 兜底；返回 (pid, name)）
-pub async fn enumerate_processes_cli(host: &str, host_port: u16) -> Result<Vec<(u32, String)>, String> {
+pub async fn enumerate_processes_cli(
+    host: &str,
+    host_port: u16,
+) -> Result<Vec<(u32, String)>, String> {
     let out = crate::backends::adb::run_raw(
         std::path::Path::new("frida-ps"),
         &["-H", &format!("{host}:{host_port}")],
@@ -233,7 +244,10 @@ pub async fn enumerate_processes_cli(host: &str, host_port: u16) -> Result<Vec<(
         }
     }
     if rows.is_empty() && !out.stdout.contains("PID") {
-        return Err(format!("frida-ps 无可解析输出（通道C）：{}", out.stderr.trim()));
+        return Err(format!(
+            "frida-ps 无可解析输出（通道C）：{}",
+            out.stderr.trim()
+        ));
     }
     Ok(rows)
 }

@@ -117,7 +117,10 @@ pub fn resolve_sidecar_launch(python: &str) -> SidecarLaunch {
             label: format!("sidecar exe（随包）：{}", packaged.display()),
         };
     }
-    let dev_exe = app_root().join("sidecar").join("dist").join("frida_bridge.exe");
+    let dev_exe = app_root()
+        .join("sidecar")
+        .join("dist")
+        .join("frida_bridge.exe");
     if dev_exe.is_file() {
         return SidecarLaunch {
             program: dev_exe.display().to_string(),
@@ -128,7 +131,10 @@ pub fn resolve_sidecar_launch(python: &str) -> SidecarLaunch {
     SidecarLaunch {
         program: python.to_string(),
         args: vec!["-u".into(), sidecar_bridge_path().display().to_string()],
-        label: format!("python 源码模式（开发回退）：{python} -u {}", sidecar_bridge_path().display()),
+        label: format!(
+            "python 源码模式（开发回退）：{python} -u {}",
+            sidecar_bridge_path().display()
+        ),
     }
 }
 
@@ -156,7 +162,10 @@ pub fn cases_root(cfg: &crate::config::AppConfig) -> PathBuf {
 pub fn ensure_layout() -> std::io::Result<()> {
     for d in [
         bin_dir(),
-        bundled_adb_path().parent().unwrap_or(bin_dir().as_path()).to_path_buf(),
+        bundled_adb_path()
+            .parent()
+            .unwrap_or(bin_dir().as_path())
+            .to_path_buf(),
         frida_server_matrix_dir(),
         logs_dir(),
         app_root().join("workspace"),

@@ -12,7 +12,10 @@ pub async fn doctor_run(deep: Option<bool>) -> Result<DoctorReport, String> {
         "environment",
         "done",
         "pipeline-view",
-        &format!("mode={} overall={} {}ms", report.mode, report.overall, report.duration_ms),
+        &format!(
+            "mode={} overall={} {}ms",
+            report.mode, report.overall, report.duration_ms
+        ),
     );
     Ok(report)
 }

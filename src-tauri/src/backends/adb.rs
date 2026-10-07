@@ -54,8 +54,9 @@ impl AdbBackend {
     pub async fn detect(configured: &str, extra_paths: &[String]) -> Result<Self, String> {
         use std::collections::HashMap;
         use std::time::Instant;
-        static CACHE: std::sync::OnceLock<tokio::sync::Mutex<HashMap<String, (AdbBackend, Instant)>>> =
-            std::sync::OnceLock::new();
+        static CACHE: std::sync::OnceLock<
+            tokio::sync::Mutex<HashMap<String, (AdbBackend, Instant)>>,
+        > = std::sync::OnceLock::new();
         let cache = CACHE.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()));
         let key = format!("{}\u{1}{}", configured, extra_paths.join("\u{1}"));
         {
@@ -67,7 +68,10 @@ impl AdbBackend {
             }
         }
         let backend = Self::detect_uncached(configured, extra_paths).await?;
-        cache.lock().await.insert(key, (backend.clone(), Instant::now()));
+        cache
+            .lock()
+            .await
+            .insert(key, (backend.clone(), Instant::now()));
         Ok(backend)
     }
 
@@ -153,8 +157,10 @@ impl AdbBackend {
                     c.chosen = false;
                 }
                 candidates[i].chosen = true;
-                candidates[i].source =
-                    format!("{}（与运行中 server 相同，避免重启乒乓）", candidates[i].source);
+                candidates[i].source = format!(
+                    "{}（与运行中 server 相同，避免重启乒乓）",
+                    candidates[i].source
+                );
             }
         }
 
@@ -212,7 +218,9 @@ impl AdbBackend {
 
     /// adb devices -l 解析。
     pub async fn devices(&self) -> Result<Vec<AdbDevice>, String> {
-        let out = self.run(&["devices", "-l"], Duration::from_secs(10)).await?;
+        let out = self
+            .run(&["devices", "-l"], Duration::from_secs(10))
+            .await?;
         Ok(parse_devices(&out.stdout))
     }
 
@@ -220,7 +228,9 @@ impl AdbBackend {
     pub async fn connect(&self, host: &str, port: u16, timeout_s: u64) -> ConnectReport {
         let t0 = std::time::Instant::now();
         let serial = format!("{host}:{port}");
-        let mut evidence = vec![format!("$ adb connect {serial}（超时 {timeout_s}s，E-02 硬约束）")];
+        let mut evidence = vec![format!(
+            "$ adb connect {serial}（超时 {timeout_s}s，E-02 硬约束）"
+        )];
         let dur = Duration::from_secs(timeout_s.max(1));
 
         let out = self
@@ -253,7 +263,9 @@ impl AdbBackend {
         // 二次确认（S-05）：独立跑 devices，看 serial 的真实状态
         let devices = self.devices().await.unwrap_or_default();
         let matched = devices.iter().find(|d| d.serial == serial);
-        let state = matched.map(|d| d.state.clone()).unwrap_or_else(|| "missing".into());
+        let state = matched
+            .map(|d| d.state.clone())
+            .unwrap_or_else(|| "missing".into());
         evidence.push(format!("二次确认：adb devices → {serial} = {state}"));
 
         let ok = state == "device";
@@ -279,7 +291,9 @@ impl AdbBackend {
         let mut evidence = vec![format!("进入 offline 自愈曲线（E-03）：{serial}")];
         for i in 1..=5u32 {
             evidence.push(format!("— 第 {i}/5 轮 —"));
-            let _ = self.run(&["disconnect", &serial], Duration::from_secs(5)).await;
+            let _ = self
+                .run(&["disconnect", &serial], Duration::from_secs(5))
+                .await;
             evidence.push(format!("  disconnect {serial} 完成"));
             tokio::time::sleep(Duration::from_secs(2)).await;
             let rep = self.connect(host, port, timeout_s).await;
@@ -297,7 +311,8 @@ impl AdbBackend {
                 };
             }
         }
-        evidence.push("✖ 5 轮自愈未恢复：设备多半未在运行，或该端口不是 adbd（先启动模拟器）".into());
+        evidence
+            .push("✖ 5 轮自愈未恢复：设备多半未在运行，或该端口不是 adbd（先启动模拟器）".into());
         ConnectReport {
             ok: false,
             serial,
@@ -309,19 +324,39 @@ impl AdbBackend {
     }
 
     /// 设备 shell（su 通道在调用方组合）。
-    pub async fn shell(&self, serial: &str, cmd: &str, timeout: Duration) -> Result<ProcOutput, String> {
+    pub async fn shell(
+        &self,
+        serial: &str,
+        cmd: &str,
+        timeout: Duration,
+    ) -> Result<ProcOutput, String> {
         self.run(&["-s", serial, "shell", cmd], timeout).await
     }
 
-    pub async fn push(&self, serial: &str, local: &str, remote: &str, timeout: Duration) -> Result<ProcOutput, String> {
-        self.run(&["-s", serial, "push", local, remote], timeout).await
+    pub async fn push(
+        &self,
+        serial: &str,
+        local: &str,
+        remote: &str,
+        timeout: Duration,
+    ) -> Result<ProcOutput, String> {
+        self.run(&["-s", serial, "push", local, remote], timeout)
+            .await
     }
 
     /// 幂等清理：先清残留再建立（文档07：跑第二次就坏 = 不允许）。
     /// pkill -f 自匹配陷阱：模式写成 [f]xxx 使执行 shell 的命令行不命中自身。
     /// A4b：安装链统一走这里（此前 session.rs 内联了同款命令）。
-    pub async fn pkill_residue(&self, serial: &str, process_name: &str) -> Result<ProcOutput, String> {
-        let head = process_name.chars().next().map(String::from).unwrap_or_default();
+    pub async fn pkill_residue(
+        &self,
+        serial: &str,
+        process_name: &str,
+    ) -> Result<ProcOutput, String> {
+        let head = process_name
+            .chars()
+            .next()
+            .map(String::from)
+            .unwrap_or_default();
         let pattern = format!("[{head}]{}", &process_name[head.len()..]);
         let cmd = format!("su -c 'pkill -f {pattern}; echo done'");
         self.shell(serial, &cmd, Duration::from_secs(10)).await
@@ -419,7 +454,9 @@ async fn scan_mumu_registry() -> Vec<PathBuf> {
         let Ok(out) = output else { continue };
         let text = String::from_utf8_lossy(&out.stdout);
         for line in text.lines() {
-            let Some(idx) = line.find("REG_SZ") else { continue };
+            let Some(idx) = line.find("REG_SZ") else {
+                continue;
+            };
             let dir = line[idx + "REG_SZ".len()..].trim().trim_matches('"');
             if dir.is_empty() {
                 continue;
@@ -461,7 +498,10 @@ async fn scan_mumu_adb() -> Vec<PathBuf> {
             if !dir.is_dir() {
                 continue;
             }
-            let name = dir.file_name().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default();
+            let name = dir
+                .file_name()
+                .map(|s| s.to_string_lossy().to_lowercase())
+                .unwrap_or_default();
             if !name.contains("mumu") {
                 continue;
             }

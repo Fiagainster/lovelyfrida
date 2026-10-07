@@ -38,12 +38,14 @@ pub async fn run() -> Result<FirstRunReport, String> {
 
     // FR-03 磁盘空间
     let root = crate::paths::app_root();
-    let (disk_ok, disk_detail) = match fs2::available_space(&root)
-        .map(|b| b as f64 / 1024.0 / 1024.0 / 1024.0)
-    {
-        Ok(g) => (g >= 1.0, format!("{root:?} 所在盘剩余 {g:.1} GB（阈值 1 GB）")),
-        Err(e) => (false, format!("探测失败：{e}")),
-    };
+    let (disk_ok, disk_detail) =
+        match fs2::available_space(&root).map(|b| b as f64 / 1024.0 / 1024.0 / 1024.0) {
+            Ok(g) => (
+                g >= 1.0,
+                format!("{root:?} 所在盘剩余 {g:.1} GB（阈值 1 GB）"),
+            ),
+            Err(e) => (false, format!("探测失败：{e}")),
+        };
     items.push(FirstRunItem {
         id: "FR-03".into(),
         name: "磁盘空间".into(),
@@ -78,7 +80,9 @@ pub async fn run() -> Result<FirstRunReport, String> {
     // FR-06 关键端口占用（本机侧；A4a：读配置端口而非写死 27042）
     let mut port_detail = String::new();
     for p in [cfg.frida_port, cfg.frida_port.saturating_add(1)] {
-        let occupied = tokio::net::TcpStream::connect(("127.0.0.1", p)).await.is_ok();
+        let occupied = tokio::net::TcpStream::connect(("127.0.0.1", p))
+            .await
+            .is_ok();
         if occupied {
             port_detail.push_str(&format!("{p} 被占用；"));
             if p == cfg.frida_port {
@@ -138,11 +142,7 @@ async fn check_sidecar() -> FirstRunItem {
         ),
         Ok(o) => (
             false,
-            format!(
-                "frida 模块不可用：{} {}",
-                o.stdout.trim(),
-                o.stderr.trim()
-            ),
+            format!("frida 模块不可用：{} {}", o.stdout.trim(), o.stderr.trim()),
         ),
         Err(e) => (false, format!("python 执行失败：{e}")),
     };

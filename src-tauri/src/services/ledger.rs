@@ -30,7 +30,6 @@ fn db() -> Result<Connection, String> {
     crate::store::open_db()
 }
 
-
 /// 新增发现。★ high 置信度必须双证据（math + device）——把原则5变成代码约束。
 pub fn add_finding(
     case_name: &str,
@@ -66,7 +65,13 @@ pub fn add_finding(
     )
     .map_err(|e| e.to_string())?;
     let id = conn.last_insert_rowid();
-    crate::audit::audit("finding_add", question_id, "done", "ledger", &format!("confidence={confidence}"));
+    crate::audit::audit(
+        "finding_add",
+        question_id,
+        "done",
+        "ledger",
+        &format!("confidence={confidence}"),
+    );
     Ok(id)
 }
 
@@ -113,7 +118,13 @@ pub fn delete_finding(id: i64) -> Result<(), String> {
     let conn = db()?;
     conn.execute("DELETE FROM findings WHERE id = ?1", [id])
         .map_err(|e| e.to_string())?;
-    crate::audit::audit("finding_delete", &id.to_string(), "done", "ledger", "用户删除");
+    crate::audit::audit(
+        "finding_delete",
+        &id.to_string(),
+        "done",
+        "ledger",
+        "用户删除",
+    );
     Ok(())
 }
 
@@ -125,7 +136,11 @@ pub fn export_markdown(case_name: &str) -> Result<String, String> {
     }
     let mut md = format!("# {case_name} · 发现台账\n\n> 由 LovelyFrida Evidence Ledger 导出。置信度：high=数学自证+真机复现双证据。\n\n");
     for (i, f) in findings.iter().enumerate() {
-        let ev: Vec<String> = f.evidence.iter().map(|e| format!("{}({})", e.kind, e.note)).collect();
+        let ev: Vec<String> = f
+            .evidence
+            .iter()
+            .map(|e| format!("{}({})", e.kind, e.note))
+            .collect();
         md.push_str(&format!(
             "## {}. 【{}】 {}\n\n- **问题**：{}\n- **答案**：`{}`\n- **置信度**：{}（证据：{}）\n- **出处**：{}\n- 【截图位 {}】\n\n",
             i + 1,
@@ -158,8 +173,20 @@ pub fn export_markdown(case_name: &str) -> Result<String, String> {
             format!("{:x}", h.finalize())
         })
         .unwrap_or_default();
-    crate::store::artifact_record(case_name, "findings_md", &path.display().to_string(), &sha, "ledger");
-    crate::audit::audit("ledger_export_md", &path.display().to_string(), "done", "ledger", case_name);
+    crate::store::artifact_record(
+        case_name,
+        "findings_md",
+        &path.display().to_string(),
+        &sha,
+        "ledger",
+    );
+    crate::audit::audit(
+        "ledger_export_md",
+        &path.display().to_string(),
+        "done",
+        "ledger",
+        case_name,
+    );
     Ok(path.display().to_string())
 }
 
@@ -168,7 +195,9 @@ pub fn export_bundle(case_name: &str) -> Result<String, String> {
     let cfg = crate::config::get();
     let cases_root = crate::paths::cases_root(&cfg);
     let ts = chrono::Local::now().format("%Y%m%d-%H%M%S");
-    let bundle = cases_root.join("exports").join(format!("{case_name}-bundle-{ts}"));
+    let bundle = cases_root
+        .join("exports")
+        .join(format!("{case_name}-bundle-{ts}"));
     // 写路径过 guard（P1-1）
     crate::guard::guard_write_or_err(&bundle)?;
     std::fs::create_dir_all(&bundle).map_err(|e| e.to_string())?;
@@ -193,8 +222,20 @@ pub fn export_bundle(case_name: &str) -> Result<String, String> {
     );
     std::fs::write(bundle.join("README.md"), readme).map_err(|e| e.to_string())?;
     // 产物登记（P2-3）：案卷包目录进 artifacts 台账（目录型产物不算哈希）
-    crate::store::artifact_record(case_name, "bundle_dir", &bundle.display().to_string(), "", "ledger");
-    crate::audit::audit("ledger_export_bundle", &bundle.display().to_string(), "done", "ledger", case_name);
+    crate::store::artifact_record(
+        case_name,
+        "bundle_dir",
+        &bundle.display().to_string(),
+        "",
+        "ledger",
+    );
+    crate::audit::audit(
+        "ledger_export_bundle",
+        &bundle.display().to_string(),
+        "done",
+        "ledger",
+        case_name,
+    );
     Ok(bundle.display().to_string())
 }
 

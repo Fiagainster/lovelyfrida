@@ -47,11 +47,16 @@ pub async fn run(
 ) -> Result<InjectionReport, String> {
     use crate::services::device_shell::{self, sq, su_c};
     if !device_shell::valid_package(package) {
-        return Err(format!("包名不合法：{package}（仅允许字母/数字/点/下划线）"));
+        return Err(format!(
+            "包名不合法：{package}（仅允许字母/数字/点/下划线）"
+        ));
     }
     for f in files {
         if !device_shell::valid_filename(&f.device_name) {
-            return Err(format!("文件名不合法：{}（不得含路径分隔符）", f.device_name));
+            return Err(format!(
+                "文件名不合法：{}（不得含路径分隔符）",
+                f.device_name
+            ));
         }
         if !f.device_dir.starts_with('/') {
             return Err(format!("目标目录必须是设备绝对路径：{}", f.device_dir));
@@ -59,7 +64,10 @@ pub async fn run(
     }
     let adb = AdbBackend::detect(&cfg.adb_path, &cfg.doctor.adb_extra_paths).await?;
     let devices = adb.devices().await?;
-    let Some(serial) = devices.iter().find(|d| d.state == "device").map(|d| d.serial.clone())
+    let Some(serial) = devices
+        .iter()
+        .find(|d| d.state == "device")
+        .map(|d| d.serial.clone())
     else {
         return Err("无 device 状态设备".into());
     };
@@ -76,7 +84,11 @@ pub async fn run(
             evidence: vec![format!("am force-stop {package}")],
         }),
         Err(e) => {
-            steps.push(StepReport { name: "① 停应用".into(), status: "fail".into(), evidence: vec![e] });
+            steps.push(StepReport {
+                name: "① 停应用".into(),
+                status: "fail".into(),
+                evidence: vec![e],
+            });
             return Ok(finish(steps, login_warnings));
         }
     }
@@ -102,7 +114,11 @@ pub async fn run(
             });
         }
         Err(e) => {
-            steps.push(StepReport { name: "② 空跑建档".into(), status: "warn".into(), evidence: vec![format!("空跑失败（继续，但目录可能不存在）：{e}")] });
+            steps.push(StepReport {
+                name: "② 空跑建档".into(),
+                status: "warn".into(),
+                evidence: vec![format!("空跑失败（继续，但目录可能不存在）：{e}")],
+            });
         }
     }
 
@@ -163,7 +179,9 @@ pub async fn run(
                     }
                     Err(e) => {
                         push_ok = false;
-                        push_evidence.push(format!("✖ cp 到 {target} 失败：{e}（注意 su 只能单引号，D-02）"));
+                        push_evidence.push(format!(
+                            "✖ cp 到 {target} 失败：{e}（注意 su 只能单引号，D-02）"
+                        ));
                     }
                 }
             }
@@ -179,7 +197,11 @@ pub async fn run(
     }
     steps.push(StepReport {
         name: "④ 推送".into(),
-        status: if push_ok { "pass".into() } else { "fail".into() },
+        status: if push_ok {
+            "pass".into()
+        } else {
+            "fail".into()
+        },
         evidence: push_evidence,
     });
     if !push_ok {
@@ -209,7 +231,9 @@ pub async fn run(
             .await
             {
                 let lower = content.stdout.to_lowercase();
-                for key in ["password", "token", "login", "session", "auth", "islogin", "logged"] {
+                for key in [
+                    "password", "token", "login", "session", "auth", "islogin", "logged",
+                ] {
                     if lower.contains(key) {
                         login_warnings.push(format!(
                             "{} 含登录态键「{}」——灌数据后 App 可能带着旧登录态直接进主页，探针零命中（O-03）",
@@ -236,7 +260,10 @@ pub async fn run(
                 steps.push(StepReport {
                     name: "⑤ 改属主".into(),
                     status: "warn".into(),
-                    evidence: vec![format!("uid 获取异常（{}），跳过 chown——如 App 闪退请手动检查（D-03）", uid)],
+                    evidence: vec![format!(
+                        "uid 获取异常（{}），跳过 chown——如 App 闪退请手动检查（D-03）",
+                        uid
+                    )],
                 });
             } else {
                 let mut ev = vec![format!("uid = {uid}（实测）")];
@@ -350,7 +377,13 @@ pub async fn run(
         evidence: md5_evidence,
     });
 
-    crate::audit::audit("injection_run", package, "done", "injection-wizard", &format!("{} 文件", files.len()));
+    crate::audit::audit(
+        "injection_run",
+        package,
+        "done",
+        "injection-wizard",
+        &format!("{} 文件", files.len()),
+    );
     Ok(finish(steps, login_warnings))
 }
 

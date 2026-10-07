@@ -71,16 +71,20 @@ fn fetch_one(
     abi: &str,
     want_sha: &str,
 ) -> Result<FetchEntry, String> {
-    let rel = format!(
-        "frida-server/{version}/android-{abi}/frida-server"
-    );
+    let rel = format!("frida-server/{version}/android-{abi}/frida-server");
     // 幂等：已存在且 sha 一致 → 跳过
     let target = workspace_target(cfg, version, abi);
     if target.is_file() {
         let bytes = std::fs::read(&target).map_err(|e| format!("读取已存在文件失败：{e}"))?;
         let got = hex::encode(sha2::Sha256::digest(&bytes));
         if got.eq_ignore_ascii_case(want_sha) {
-            return Ok(FetchEntry { abi: abi.into(), path: rel, size: bytes.len() as u64, skipped: true, error: None });
+            return Ok(FetchEntry {
+                abi: abi.into(),
+                path: rel,
+                size: bytes.len() as u64,
+                skipped: true,
+                error: None,
+            });
         }
     }
     let url = format!("{RELEASE_BASE}/{version}/frida-server-{version}-android-{abi}.xz");
@@ -111,12 +115,22 @@ fn fetch_one(
         std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败：{e}"))?;
     }
     std::fs::write(&target, &plain).map_err(|e| format!("落盘失败：{e}"))?;
-    Ok(FetchEntry { abi: abi.into(), path: rel, size: plain.len() as u64, skipped: false, error: None })
+    Ok(FetchEntry {
+        abi: abi.into(),
+        path: rel,
+        size: plain.len() as u64,
+        skipped: false,
+        error: None,
+    })
 }
 
 /// 按需下载入口。version 由命令层解析（None → sidecar hello 的客户端版本，S-01 三处一致）；
 /// abis=None → manifest 中该版本登记的全部 ABI。
-pub async fn fetch(cfg: &AppConfig, version: String, abis: Option<Vec<String>>) -> Result<FetchReport, String> {
+pub async fn fetch(
+    cfg: &AppConfig,
+    version: String,
+    abis: Option<Vec<String>>,
+) -> Result<FetchReport, String> {
     let t0 = std::time::Instant::now();
     let version = version.trim().to_string();
     if version.is_empty() {
@@ -149,9 +163,11 @@ pub async fn fetch(cfg: &AppConfig, version: String, abis: Option<Vec<String>>) 
         let version2 = version.clone();
         let abi2 = abi.clone();
         let sha2s = sha.clone();
-        let r = tauri::async_runtime::spawn_blocking(move || fetch_one(&cfg2, &version2, &abi2, &sha2s))
-            .await
-            .map_err(|e| format!("下载任务失败：{e}"))?;
+        let r = tauri::async_runtime::spawn_blocking(move || {
+            fetch_one(&cfg2, &version2, &abi2, &sha2s)
+        })
+        .await
+        .map_err(|e| format!("下载任务失败：{e}"))?;
         match r {
             Ok(e) => entries.push(e),
             Err(e) => entries.push(FetchEntry {
@@ -167,9 +183,17 @@ pub async fn fetch(cfg: &AppConfig, version: String, abis: Option<Vec<String>>) 
     crate::audit::audit(
         "frida_server_fetch",
         &version,
-        if ok_count == entries.len() { "done" } else { "warn" },
+        if ok_count == entries.len() {
+            "done"
+        } else {
+            "warn"
+        },
         "doctor",
         &format!("{ok_count}/{} ABI 成功", entries.len()),
     );
-    Ok(FetchReport { version, entries, elapsed_ms: t0.elapsed().as_millis() as u64 })
+    Ok(FetchReport {
+        version,
+        entries,
+        elapsed_ms: t0.elapsed().as_millis() as u64,
+    })
 }

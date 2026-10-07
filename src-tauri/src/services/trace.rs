@@ -114,7 +114,10 @@ impl TraceState {
                 crate::store::run_finish(db_run_id, lines, "superseded", &ended)
             })
             .await;
-            tracing::warn!("[trace] 旧 run {} 未关闭即开新 run：旧 run 已按 superseded 收尾", stale.id);
+            tracing::warn!(
+                "[trace] 旧 run {} 未关闭即开新 run：旧 run 已按 superseded 收尾",
+                stale.id
+            );
         }
         let id = chrono::Local::now().format("%Y%m%d-%H%M%S%.3f").to_string();
         let dir = {
@@ -172,7 +175,6 @@ impl TraceState {
         .await;
         Some(run.id)
     }
-
 }
 
 /// 观测事件类型表（批次⑪②从硬编码白名单演进为「已知类型 + 未知兜底」）：
@@ -218,11 +220,7 @@ fn append_record(run: &RunState, rec: &TraceRecord) {
 /// agent 事件序号断裂检测（批次⑪③）：payload 携带 aseq 时比对已见最大值，
 /// 断裂补一条 seq_gap 记录（证据文件必须能解释任何空洞）；乱序/迟到（aseq ≤ 已见
 /// 最大值，flush 重排重发所致）照常落盘，不误报。返回 Some(gap记录payload)。
-fn check_agent_seq(
-    state: &TraceState,
-    script_id: u64,
-    payload: &Value,
-) -> Option<Value> {
+fn check_agent_seq(state: &TraceState, script_id: u64, payload: &Value) -> Option<Value> {
     let aseq = payload.get("aseq").and_then(|v| v.as_u64())?;
     let mut map = state.last_aseq.lock().unwrap_or_else(|p| p.into_inner());
     let last = map.entry(script_id).or_insert(aseq); // 首见：以当次为基线（run 开启前的历史不属本 run 证据）
@@ -255,8 +253,12 @@ fn write_record(run: &RunState, state: &TraceState, payload: &Value) -> Option<T
     }
     let mut payload = payload.clone();
     if !KNOWN_TRACE_TYPES.contains(&t) {
-        payload["_lf_untyped"] = Value::String("未知事件类型，按原始 JSON 兜底落盘（批次⑪②）".into());
-        let mut w = state.warned_untyped.lock().unwrap_or_else(|p| p.into_inner());
+        payload["_lf_untyped"] =
+            Value::String("未知事件类型，按原始 JSON 兜底落盘（批次⑪②）".into());
+        let mut w = state
+            .warned_untyped
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         if w.insert(t.to_string()) {
             tracing::warn!("[trace] 未登记的 agent 事件类型 t={t:?}——已按原始 JSON 落证据，请确认是否需要在 KNOWN_TRACE_TYPES 登记");
         }
@@ -302,7 +304,13 @@ pub fn on_agent_message(
                 if std::fs::write(&path, &bytes).is_ok() {
                     tracing::info!("[dex] 落盘 {} ({} bytes)", path.display(), bytes.len());
                     let _ = app.emit("dex-dumped", serde_json::json!({"path": path.display().to_string(), "size": bytes.len(), "base": base}));
-                    crate::audit::audit("dex_dump", &path.display().to_string(), "done", "probe-lab", &format!("{} bytes", bytes.len()));
+                    crate::audit::audit(
+                        "dex_dump",
+                        &path.display().to_string(),
+                        "done",
+                        "probe-lab",
+                        &format!("{} bytes", bytes.len()),
+                    );
                 }
             }
         });
@@ -358,7 +366,9 @@ pub fn on_agent_message(
         append_record(run, &rec);
         let _ = app.emit("trace-event", rec);
     }
-    let Some(rec) = write_record(run, trace, payload) else { return };
+    let Some(rec) = write_record(run, trace, payload) else {
+        return;
+    };
     drop(guard);
     let _ = app.emit("trace-event", rec);
     if t == "probe_error" {
@@ -395,7 +405,10 @@ mod tests {
     #[test]
     fn seq_首见建基线_单调不断裂() {
         let st = TraceState::default();
-        assert!(check_agent_seq(&st, 1, &ev(7)).is_none(), "首见 aseq 建基线，不报 gap");
+        assert!(
+            check_agent_seq(&st, 1, &ev(7)).is_none(),
+            "首见 aseq 建基线，不报 gap"
+        );
         assert!(check_agent_seq(&st, 1, &ev(8)).is_none());
         assert!(check_agent_seq(&st, 1, &ev(9)).is_none());
     }
@@ -419,7 +432,10 @@ mod tests {
         check_agent_seq(&st, 1, &ev(100));
         // 重排补发的旧事件（aseq ≤ 已见最大值）是证据，照常放行，只是不报 gap
         assert!(check_agent_seq(&st, 1, &ev(50)).is_none());
-        assert!(check_agent_seq(&st, 1, &ev(100)).is_none(), "重复事件不报 gap");
+        assert!(
+            check_agent_seq(&st, 1, &ev(100)).is_none(),
+            "重复事件不报 gap"
+        );
     }
 
     #[test]

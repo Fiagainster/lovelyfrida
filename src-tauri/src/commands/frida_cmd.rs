@@ -1,14 +1,17 @@
 use crate::backends::adb::AdbBackend;
-use crate::services::experiment::{ExperimentConfig, ExperimentReport};
-use crate::services::brute::{estimate as brute_estimate_fn, generate_c_skeleton, run_builtin as brute_run_fn, BruteEstimate, BruteResult};
+use crate::services::brute::{
+    estimate as brute_estimate_fn, generate_c_skeleton, run_builtin as brute_run_fn, BruteEstimate,
+    BruteResult,
+};
 use crate::services::crypto::{reconstruct as crypto_reconstruct_fn, ReconstructResult, Sample};
-use crate::services::injection::{InjectionFile, InjectionReport};
+use crate::services::experiment::{ExperimentConfig, ExperimentReport};
 use crate::services::extras_svc as ex;
+use crate::services::injection::{InjectionFile, InjectionReport};
 use crate::services::ledger::{self as ledger_svc, EvidenceItem, Finding};
 use crate::services::recorder::RecorderState;
 use crate::services::session::{
     attach, detach, enumerate_processes, forward_setup, ping, server_install, server_status,
-    FridaState, ProcEntry, SessionSnapshot, ServerStatusReport, StepReport,
+    FridaState, ProcEntry, ServerStatusReport, SessionSnapshot, StepReport,
 };
 
 /// frida 环境总览（版本三处一致 + 运行状态 + forward + 矩阵）
@@ -149,7 +152,9 @@ pub async fn frida_session_status(
 
 /// 消息回路自检：post ping（pong 走事件流到前端）
 #[tauri::command]
-pub async fn frida_session_ping(state: tauri::State<'_, FridaState>) -> Result<serde_json::Value, String> {
+pub async fn frida_session_ping(
+    state: tauri::State<'_, FridaState>,
+) -> Result<serde_json::Value, String> {
     ping(&state).await
 }
 
@@ -243,10 +248,9 @@ pub async fn crypto_reconstruct(
     tauri::async_runtime::spawn_blocking(move || {
         let r = crypto_reconstruct_fn(&samples);
         if let Some(scheme) = &r.scheme {
-            let refs = serde_json::json!(
-                samples.iter().map(|s| s.target.clone()).collect::<Vec<_>>()
-            )
-            .to_string();
+            let refs =
+                serde_json::json!(samples.iter().map(|s| s.target.clone()).collect::<Vec<_>>())
+                    .to_string();
             crate::store::crypto_scheme_record(
                 caseName.as_deref().unwrap_or("默认案件"),
                 &scheme.family,
@@ -291,7 +295,10 @@ pub async fn frida_server_fetch(
 
 /// 爆破预估三件套（文档04-G）
 #[tauri::command]
-pub async fn brute_estimate(scheme: crate::services::crypto::Scheme, mask: String) -> Result<BruteEstimate, String> {
+pub async fn brute_estimate(
+    scheme: crate::services::crypto::Scheme,
+    mask: String,
+) -> Result<BruteEstimate, String> {
     Ok(brute_estimate_fn(&mask, &scheme))
 }
 
@@ -312,10 +319,18 @@ pub async fn brute_run(
     let mask_display = mask.clone();
     let family_display = scheme.family.clone();
     let r = tauri::async_runtime::spawn_blocking(move || {
-        let r = brute_run_fn(&scheme, &mask, &salt, &known, max_candidates.unwrap_or(5_000_000));
+        let r = brute_run_fn(
+            &scheme,
+            &mask,
+            &salt,
+            &known,
+            max_candidates.unwrap_or(5_000_000),
+        );
         // 作业落库（失败不阻断：库不可用时爆破结果仍返回 UI）
         let sets = crate::services::brute::expand_mask(&mask);
-        let total: u64 = sets.iter().fold(1u64, |acc, s| acc.saturating_mul(s.len() as u64));
+        let total: u64 = sets
+            .iter()
+            .fold(1u64, |acc, s| acc.saturating_mul(s.len() as u64));
         let space = serde_json::json!({ "mask": mask, "total": total }).to_string();
         let speed = if r.duration_ms > 0 {
             r.tried as f64 / (r.duration_ms as f64 / 1000.0)
@@ -375,7 +390,13 @@ pub async fn brute_generate_c(
         // 写路径过 guard（P1-1）
         crate::guard::guard_write_or_err(&path)?;
         std::fs::write(&path, c).map_err(|e| e.to_string())?;
-        crate::audit::audit("brute_generate_c", &path.display().to_string(), "done", "restore-node", &scheme.family);
+        crate::audit::audit(
+            "brute_generate_c",
+            &path.display().to_string(),
+            "done",
+            "restore-node",
+            &scheme.family,
+        );
         Ok(serde_json::json!({ "path": path.display().to_string() }))
     })
     .await
@@ -397,7 +418,16 @@ pub async fn ledger_add(
     screenshot_slot: String,
 ) -> Result<i64, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        ledger_svc::add_finding(&case_name, &question_id, &question, &answer, &confidence, &evidence, &source, &screenshot_slot)
+        ledger_svc::add_finding(
+            &case_name,
+            &question_id,
+            &question,
+            &answer,
+            &confidence,
+            &evidence,
+            &source,
+            &screenshot_slot,
+        )
     })
     .await
     .map_err(|e| format!("后台任务失败：{e}"))?
@@ -474,13 +504,34 @@ pub async fn script_delete(name: String) -> Result<(), String> {
 #[tauri::command]
 #[allow(non_snake_case)]
 pub async fn profile_save(
-    caseName: String, id: Option<i64>, package: String, uid: Option<i64>,
-    apkPath: String, dataDirs: String, secretFiles: String, secretTransform: String,
-    entryGesture: String, entryCoords: String, probeTargets: String, notes: String,
+    caseName: String,
+    id: Option<i64>,
+    package: String,
+    uid: Option<i64>,
+    apkPath: String,
+    dataDirs: String,
+    secretFiles: String,
+    secretTransform: String,
+    entryGesture: String,
+    entryCoords: String,
+    probeTargets: String,
+    notes: String,
 ) -> Result<i64, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        ex::profile_save(&caseName, id, &package, uid, &apkPath, &dataDirs, &secretFiles,
-            &secretTransform, &entryGesture, &entryCoords, &probeTargets, &notes)
+        ex::profile_save(
+            &caseName,
+            id,
+            &package,
+            uid,
+            &apkPath,
+            &dataDirs,
+            &secretFiles,
+            &secretTransform,
+            &entryGesture,
+            &entryCoords,
+            &probeTargets,
+            &notes,
+        )
     })
     .await
     .map_err(|e| format!("后台任务失败：{e}"))?
@@ -526,29 +577,45 @@ pub async fn dumps_list() -> Result<Vec<serde_json::Value>, String> {
 // ---------- B2 落库数据面（文档10）：历史查询 ----------
 
 #[tauri::command]
-pub async fn history_sessions(limit: Option<i64>) -> Result<Vec<crate::services::history::SessionRow>, String> {
-    tauri::async_runtime::spawn_blocking(move || crate::services::history::list_sessions(limit.unwrap_or(20)))
-        .await
-        .map_err(|e| format!("后台任务失败：{e}"))?
+pub async fn history_sessions(
+    limit: Option<i64>,
+) -> Result<Vec<crate::services::history::SessionRow>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::services::history::list_sessions(limit.unwrap_or(20))
+    })
+    .await
+    .map_err(|e| format!("后台任务失败：{e}"))?
 }
 
 #[tauri::command]
-pub async fn history_runs(limit: Option<i64>) -> Result<Vec<crate::services::history::RunRow>, String> {
-    tauri::async_runtime::spawn_blocking(move || crate::services::history::list_runs(limit.unwrap_or(20)))
-        .await
-        .map_err(|e| format!("后台任务失败：{e}"))?
+pub async fn history_runs(
+    limit: Option<i64>,
+) -> Result<Vec<crate::services::history::RunRow>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::services::history::list_runs(limit.unwrap_or(20))
+    })
+    .await
+    .map_err(|e| format!("后台任务失败：{e}"))?
 }
 
 #[tauri::command]
-pub async fn history_experiments(limit: Option<i64>) -> Result<Vec<crate::services::history::ExperimentRow>, String> {
-    tauri::async_runtime::spawn_blocking(move || crate::services::history::list_experiments(limit.unwrap_or(20)))
-        .await
-        .map_err(|e| format!("后台任务失败：{e}"))?
+pub async fn history_experiments(
+    limit: Option<i64>,
+) -> Result<Vec<crate::services::history::ExperimentRow>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::services::history::list_experiments(limit.unwrap_or(20))
+    })
+    .await
+    .map_err(|e| format!("后台任务失败：{e}"))?
 }
 
 #[tauri::command]
-pub async fn history_brute_jobs(limit: Option<i64>) -> Result<Vec<crate::services::history::BruteJobRow>, String> {
-    tauri::async_runtime::spawn_blocking(move || crate::services::history::list_brute_jobs(limit.unwrap_or(20)))
-        .await
-        .map_err(|e| format!("后台任务失败：{e}"))?
+pub async fn history_brute_jobs(
+    limit: Option<i64>,
+) -> Result<Vec<crate::services::history::BruteJobRow>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::services::history::list_brute_jobs(limit.unwrap_or(20))
+    })
+    .await
+    .map_err(|e| format!("后台任务失败：{e}"))?
 }

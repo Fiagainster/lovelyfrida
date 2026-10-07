@@ -94,7 +94,13 @@ pub fn ensure_not_evidence_in(
                 "检材只读根「{}」：写入被直接拒绝（文档07 只读第一原则）",
                 root.display()
             );
-            crate::audit::audit("write", &normalized.display().to_string(), "denied", "guard", &reason);
+            crate::audit::audit(
+                "write",
+                &normalized.display().to_string(),
+                "denied",
+                "guard",
+                &reason,
+            );
             return GuardVerdict {
                 allowed: false,
                 reason,
@@ -110,7 +116,13 @@ pub fn ensure_not_evidence_in(
     if has_source_segment {
         let reason =
             "source\\ 为检材原始副本（只读语义），请写入 work\\（文档07 只读语义分层）".to_string();
-        crate::audit::audit("write", &normalized.display().to_string(), "denied", "guard", &reason);
+        crate::audit::audit(
+            "write",
+            &normalized.display().to_string(),
+            "denied",
+            "guard",
+            &reason,
+        );
         return GuardVerdict {
             allowed: false,
             reason,
@@ -153,7 +165,13 @@ pub fn check_write_in(
             "只接受工作区路径（{}）；如需处理检材，先复制到工作副本（文档07 强制工作副本）",
             workspace.display()
         );
-        crate::audit::audit("write", &normalized.display().to_string(), "denied", "guard", &reason);
+        crate::audit::audit(
+            "write",
+            &normalized.display().to_string(),
+            "denied",
+            "guard",
+            &reason,
+        );
         return GuardVerdict {
             allowed: false,
             reason,
@@ -207,7 +225,12 @@ pub fn snapshot_file(src: &std::path::Path) -> Result<std::path::PathBuf, String
         &src.display().to_string(),
         "done",
         "guard",
-        &format!("{} -> {} sha256={}", src.display(), dest.display(), &sha[..16]),
+        &format!(
+            "{} -> {} sha256={}",
+            src.display(),
+            dest.display(),
+            &sha[..16]
+        ),
     );
     Ok(dest)
 }
@@ -236,7 +259,11 @@ mod tests {
         // workspace\..\..\evidence 的构造绕过必须被词法清理戳穿（P1-2）
         let (cfg, root) = test_env();
         // workspace\..\evidence\x 语义上落在检材只读根内，必须被拒绝
-        let evil = root.join("workspace").join("..").join("evidence").join("db.sqlite");
+        let evil = root
+            .join("workspace")
+            .join("..")
+            .join("evidence")
+            .join("db.sqlite");
         let v = check_write_in(&cfg, &root, &evil.display().to_string());
         assert!(!v.allowed, "穿越到检材只读根必须被拒绝：{}", v.reason);
         // 断言用同一形式：evidence 根也过 normalize（对齐 canonicalize 的 verbatim 前缀）

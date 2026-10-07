@@ -30,7 +30,7 @@ fn token_charset(token: &str) -> Vec<char> {
         "?d" => ('0'..='9').collect(),
         "?h" => ('0'..='9').chain('a'..='f').collect(),
         "?H" => ('0'..='9').chain('A'..='F').collect(),
-        "?a" => ((' '..='~')).collect(),
+        "?a" => (' '..='~').collect(),
         "?s" => "!@#$%^&*()-_=+[]{};:'\",.<>/?\\| `~".chars().collect(),
         other => other.chars().collect(),
     }
@@ -68,12 +68,21 @@ pub fn estimate(mask: &str, scheme: &Scheme) -> BruteEstimate {
     let eta_seconds = total / est_speed.max(1);
     let (engine, reason) = if chain_rounds == 1 {
         if total <= 200_000_000 {
-            ("builtin".into(), "单轮哈希且空间可接受：内置爆破可直接跑".into())
+            (
+                "builtin".into(),
+                "单轮哈希且空间可接受：内置爆破可直接跑".into(),
+            )
         } else {
-            ("hashcat".into(), "单轮哈希：生成 hashcat -m 1410 命令（GPU 效率远超 CPU）".into())
+            (
+                "hashcat".into(),
+                "单轮哈希：生成 hashcat -m 1410 命令（GPU 效率远超 CPU）".into(),
+            )
         }
     } else if total <= 50_000 {
-        ("builtin".into(), format!("链式 {chain_rounds} 轮：小空间内置可跑（预估 {eta_seconds}s 内）"))
+        (
+            "builtin".into(),
+            format!("链式 {chain_rounds} 轮：小空间内置可跑（预估 {eta_seconds}s 内）"),
+        )
     } else {
         ("generate_c".into(), format!("链式 {chain_rounds} 轮无现成 hashcat 模式：生成 C 专用爆破器（链式轮优化 + 强制自测桩，writeup 实测 ~2400 候选/秒/4核）"))
     };
@@ -111,7 +120,9 @@ pub fn run_builtin(
 
     let sets = expand_mask(mask);
     // 非饱和 product 在 ?a×11 位时会溢出（debug panic / release 回绕）
-    let total: u64 = sets.iter().fold(1u64, |acc, s| acc.saturating_mul(s.len() as u64));
+    let total: u64 = sets
+        .iter()
+        .fold(1u64, |acc, s| acc.saturating_mul(s.len() as u64));
     let t0 = std::time::Instant::now();
     let mut tried: u64 = 0;
     let mut hit: Option<String> = None;
@@ -127,7 +138,11 @@ pub fn run_builtin(
         }
         tried += 1;
         let out = recompute(
-            &Sample { plaintext: candidate.clone(), salt: salt.into(), target: String::new() },
+            &Sample {
+                plaintext: candidate.clone(),
+                salt: salt.into(),
+                target: String::new(),
+            },
             scheme,
         );
         if let Some(out) = out {
@@ -170,13 +185,27 @@ pub fn run_builtin(
 /// C 专用爆破器骨架生成（writeup hcbrute4 风格：链式轮优化 + 强制自测 + 掩码循环 + OpenMP）。
 /// P2-2（文档10）：此前 main() 只有自测桩，掩码循环是 TODO 空壳——现在完整生成。
 pub fn generate_c_skeleton(scheme: &Scheme, sample: &Sample, mask: &str) -> String {
-    let iter = if scheme.chain_input.starts_with("单轮") { 1 } else { scheme.iterations };
+    let iter = if scheme.chain_input.starts_with("单轮") {
+        1
+    } else {
+        scheme.iterations
+    };
     let chain_hex = scheme.chain_input.contains("hex");
     // 家族 → 摘要长度 / OpenSSL 一次性函数（SHA-256 之外同样成立；自测门兜底正确性）
     let (digest_len, hash_fn, hash_include, family_note) = match scheme.family.as_str() {
-        "SHA-1" => (20usize, "SHA1", "#include <openssl/sha.h>", "SHA-1（20 字节摘要）"),
+        "SHA-1" => (
+            20usize,
+            "SHA1",
+            "#include <openssl/sha.h>",
+            "SHA-1（20 字节摘要）",
+        ),
         "MD5" => (16, "MD5", "#include <openssl/md5.h>", "MD5（16 字节摘要）"),
-        _ => (32, "SHA256", "#include <openssl/sha.h>", "SHA-256（32 字节摘要）"),
+        _ => (
+            32,
+            "SHA256",
+            "#include <openssl/sha.h>",
+            "SHA-256（32 字节摘要）",
+        ),
     };
     let hex_len = digest_len * 2;
 
@@ -194,7 +223,9 @@ pub fn generate_c_skeleton(scheme: &Scheme, sample: &Sample, mask: &str) -> Stri
     // 掩码展开 → 每位字符集（与内置爆破同一套 token 语义）
     let sets = expand_mask(mask);
     let positions = sets.len();
-    let total: u64 = sets.iter().fold(1u64, |acc, s| acc.saturating_mul(s.len() as u64));
+    let total: u64 = sets
+        .iter()
+        .fold(1u64, |acc, s| acc.saturating_mul(s.len() as u64));
     // 字符集用数值字节数组，规避 C 字符串 \x 转义的「贪心吞位」与引号转义问题
     let set_decls: String = sets
         .iter()
@@ -205,8 +236,15 @@ pub fn generate_c_skeleton(scheme: &Scheme, sample: &Sample, mask: &str) -> Stri
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let set_refs: String = (0..positions).map(|i| format!("SET_{i}")).collect::<Vec<_>>().join(", ");
-    let set_lens: String = sets.iter().map(|s| format!("{}", s.len())).collect::<Vec<_>>().join(", ");
+    let set_refs: String = (0..positions)
+        .map(|i| format!("SET_{i}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let set_lens: String = sets
+        .iter()
+        .map(|s| format!("{}", s.len()))
+        .collect::<Vec<_>>()
+        .join(", ");
     // 盐字节按方案 salt_form 语义展开（与 Rust recompute 同源；此前恒取原文导致
     // B64Decoded/HexText 方案的骨架自测必挂），同样走数值字节数组
     let salt_b = scheme_salt_bytes(scheme, &sample.salt);
@@ -227,24 +265,36 @@ pub fn generate_c_skeleton(scheme: &Scheme, sample: &Sample, mask: &str) -> Stri
     // 首轮输入组装（与 crypto::first_input 同源）
     let concat_body = if uses_salt {
         match concat_kind {
-            Concat::SaltPw => r#"    if (pwdlen + sizeof(SALT) > sizeof(buf)) return; /* 候选+盐超缓冲：放弃该候选 */
+            Concat::SaltPw => {
+                r#"    if (pwdlen + sizeof(SALT) > sizeof(buf)) return; /* 候选+盐超缓冲：放弃该候选 */
     memcpy(buf, SALT, sizeof(SALT));
     memcpy(buf + sizeof(SALT), pwd, pwdlen);
-    off = pwdlen + sizeof(SALT);"#,
-            _ => r#"    if (pwdlen + sizeof(SALT) > sizeof(buf)) return; /* 候选+盐超缓冲：放弃该候选 */
+    off = pwdlen + sizeof(SALT);"#
+            }
+            _ => {
+                r#"    if (pwdlen + sizeof(SALT) > sizeof(buf)) return; /* 候选+盐超缓冲：放弃该候选 */
     memcpy(buf, pwd, pwdlen);
     memcpy(buf + pwdlen, SALT, sizeof(SALT));
-    off = pwdlen + sizeof(SALT);"#,
+    off = pwdlen + sizeof(SALT);"#
+            }
         }
     } else {
         "    if (pwdlen > sizeof(buf)) return; /* 候选超缓冲：放弃该候选 */\n    memcpy(buf, pwd, pwdlen);\n    off = pwdlen;"
     };
     // 自测明文同样字节化（用户口令可能含引号/反斜杠/非 ASCII，落 C 字符串必出转义事故）
-    let selftest_bytes: Vec<String> = sample.plaintext.as_bytes().iter().map(|b| format!("0x{b:02x}")).collect();
+    let selftest_bytes: Vec<String> = sample
+        .plaintext
+        .as_bytes()
+        .iter()
+        .map(|b| format!("0x{b:02x}"))
+        .collect();
     let selftest_decl = if selftest_bytes.is_empty() {
         "static const unsigned char SELFTEST_PWD[] = {0};".to_string()
     } else {
-        format!("static const unsigned char SELFTEST_PWD[] = {{{}}};", selftest_bytes.join(","))
+        format!(
+            "static const unsigned char SELFTEST_PWD[] = {{{}}};",
+            selftest_bytes.join(",")
+        )
     };
     let selftest_len = sample.plaintext.as_bytes().len();
 
@@ -428,12 +478,19 @@ mod tests {
     #[test]
     fn test_builtin_self_test_gate() {
         // 方案与已知样本不一致 → 自测必须失败并拒绝
-        let bad = Scheme { iterations: 2, ..single_scheme() };
+        let bad = Scheme {
+            iterations: 2,
+            ..single_scheme()
+        };
         let r = run_builtin(
             &bad,
             "?d?d?d?d",
             "somesalt",
-            &Sample { plaintext: "1234".into(), salt: "somesalt".into(), target: "zz".into() },
+            &Sample {
+                plaintext: "1234".into(),
+                salt: "somesalt".into(),
+                target: "zz".into(),
+            },
             1000,
         );
         assert!(!r.self_test_passed);
@@ -454,17 +511,28 @@ mod tests {
             &scheme,
             "?d?d?d?d",
             salt,
-            &Sample { plaintext: "0000".into(), salt: salt.into(), target: target.clone() },
+            &Sample {
+                plaintext: "0000".into(),
+                salt: salt.into(),
+                target: target.clone(),
+            },
             100000,
         );
         // 自测用 0000 不可能命中目标 → 用已知同源样本做自测
-        assert!(!r.self_test_passed, "0000 的重算不会等于 5937 的目标，自测门应拦截");
+        assert!(
+            !r.self_test_passed,
+            "0000 的重算不会等于 5937 的目标，自测门应拦截"
+        );
         // 正确姿势：自测样本即目标生成样本（writeup 场景：从库里拿到的 (已验证明文, 目标)）
         let r2 = run_builtin(
             &scheme,
             "?d?d?d?d",
             salt,
-            &Sample { plaintext: "5937".into(), salt: salt.into(), target },
+            &Sample {
+                plaintext: "5937".into(),
+                salt: salt.into(),
+                target,
+            },
             100000,
         );
         assert!(r2.self_test_passed);
@@ -494,7 +562,11 @@ mod tests {
             &scheme,
             "?d?d?d?d",
             salt,
-            &Sample { plaintext: "7777".into(), salt: salt.into(), target },
+            &Sample {
+                plaintext: "7777".into(),
+                salt: salt.into(),
+                target,
+            },
             100000,
         );
         assert!(r.self_test_passed);
@@ -508,14 +580,21 @@ mod tests {
         scheme.iterations = 10000;
         let c = generate_c_skeleton(
             &scheme,
-            &Sample { plaintext: "Abc123456".into(), salt: "Zr63".into(), target: "00ab".into() },
+            &Sample {
+                plaintext: "Abc123456".into(),
+                salt: "Zr63".into(),
+                target: "00ab".into(),
+            },
             "?u?l?l?d?d?d?d?d?d",
         );
         assert!(c.contains("#define ITER 10000u"));
         assert!(c.contains("自测失败"));
         assert!(c.contains("HIT pwd="));
         assert!(c.contains("omp parallel for"), "掩码循环必须带 OpenMP 并行");
-        assert!(c.contains("static const char SET_0[]"), "掩码字符集必须展开为 C 数组");
+        assert!(
+            c.contains("static const char SET_0[]"),
+            "掩码字符集必须展开为 C 数组"
+        );
         assert!(c.contains("里程表"), "首位之外必须是串行里程表推进");
         assert!(!c.contains("TODO"), "骨架不允许残留 TODO 空壳");
         assert!(c.contains("-lcrypto"));
@@ -535,7 +614,11 @@ mod tests {
         let target = hex::encode(h.finalize());
         let c = generate_c_skeleton(
             &scheme,
-            &Sample { plaintext: "7".into(), salt: salt.into(), target },
+            &Sample {
+                plaintext: "7".into(),
+                salt: salt.into(),
+                target,
+            },
             "?d",
         );
         assert!(c.contains("#define POSITIONS 1"));
@@ -550,15 +633,24 @@ mod tests {
         scheme.salt_form = "盐 base64 解码字节".into();
         let raw_salt = "\u{7f}f\u{0b}\u{8d}"; // 解码后含控制字节，文本形态无法表达
         let b64_salt = base64::engine::general_purpose::STANDARD.encode(raw_salt);
-        let decoded = base64::engine::general_purpose::STANDARD.decode(&b64_salt).unwrap();
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(&b64_salt)
+            .unwrap();
         let c = generate_c_skeleton(
             &scheme,
-            &Sample { plaintext: "pw".into(), salt: b64_salt.clone(), target: "00".into() },
+            &Sample {
+                plaintext: "pw".into(),
+                salt: b64_salt.clone(),
+                target: "00".into(),
+            },
             "?d",
         );
         let want: Vec<String> = decoded.iter().map(|b| format!("0x{b:02x}")).collect();
         assert!(
-            c.contains(&format!("static const unsigned char SALT[] = {{{}}}", want.join(","))),
+            c.contains(&format!(
+                "static const unsigned char SALT[] = {{{}}}",
+                want.join(",")
+            )),
             "SALT 必须是 base64 解码后的字节：\n{c}"
         );
     }
@@ -570,26 +662,44 @@ mod tests {
         scheme.concat = "盐‖明文".into();
         let c = generate_c_skeleton(
             &scheme,
-            &Sample { plaintext: "pw\"\\x".into(), salt: "s".into(), target: "00".into() },
+            &Sample {
+                plaintext: "pw\"\\x".into(),
+                salt: "s".into(),
+                target: "00".into(),
+            },
             "?d",
         );
         assert!(
-            c.contains("memcpy(buf, SALT, sizeof(SALT));\n    memcpy(buf + sizeof(SALT), pwd, pwdlen);"),
+            c.contains(
+                "memcpy(buf, SALT, sizeof(SALT));\n    memcpy(buf + sizeof(SALT), pwd, pwdlen);"
+            ),
             "盐‖明文方案的骨架必须盐在前：\n{c}"
         );
         // 自测桩必须字节化（口令含引号/反斜杠也能编译）
-        assert!(c.contains("static const unsigned char SELFTEST_PWD[] = {0x70,0x77,0x22,0x5c,0x78}"),);
-        assert!(!c.contains("SELFTEST_PWD[] = \""), "自测明文不允许落 C 字符串字面量");
+        assert!(
+            c.contains("static const unsigned char SELFTEST_PWD[] = {0x70,0x77,0x22,0x5c,0x78}"),
+        );
+        assert!(
+            !c.contains("SELFTEST_PWD[] = \""),
+            "自测明文不允许落 C 字符串字面量"
+        );
 
         // 仅明文：不得出现 SALT 数组
         let mut scheme2 = single_scheme();
         scheme2.concat = "仅明文".into();
         let c2 = generate_c_skeleton(
             &scheme2,
-            &Sample { plaintext: "pw".into(), salt: "s".into(), target: "00".into() },
+            &Sample {
+                plaintext: "pw".into(),
+                salt: "s".into(),
+                target: "00".into(),
+            },
             "?d",
         );
-        assert!(!c2.contains("unsigned char SALT[]"), "仅明文方案不应生成 SALT：\n{c2}");
+        assert!(
+            !c2.contains("unsigned char SALT[]"),
+            "仅明文方案不应生成 SALT：\n{c2}"
+        );
         assert!(c2.contains("memcpy(buf, pwd, pwdlen);"));
     }
 

@@ -214,7 +214,11 @@ pub fn init() -> Result<(), String> {
     )
     .map_err(|e| e.to_string())?;
     let existing: Option<String> = conn
-        .query_row("SELECT value FROM meta WHERE key='schema_version'", [], |r| r.get(0))
+        .query_row(
+            "SELECT value FROM meta WHERE key='schema_version'",
+            [],
+            |r| r.get(0),
+        )
         .map(Some)
         .or_else(|e| {
             if e == rusqlite::Error::QueryReturnedNoRows {
@@ -284,7 +288,13 @@ pub(crate) fn ensure_case_row(conn: &Connection, case_name: &str) -> Result<i64,
     let existing: Option<i64> = stmt
         .query_row([case_name], |r| r.get(0))
         .map(Some)
-        .or_else(|e| if e == rusqlite::Error::QueryReturnedNoRows { Ok(None) } else { Err(e) })
+        .or_else(|e| {
+            if e == rusqlite::Error::QueryReturnedNoRows {
+                Ok(None)
+            } else {
+                Err(e)
+            }
+        })
         .map_err(|e| e.to_string())?;
     if let Some(id) = existing {
         return Ok(id);
@@ -368,7 +378,12 @@ pub fn session_finish(session_id: i64, state: &str, detail: &str) {
         let conn = open_db()?;
         conn.execute(
             "UPDATE sessions SET state = ?2, ended_at = ?3, detail = detail || ?4 WHERE id = ?1",
-            rusqlite::params![session_id, state, chrono::Local::now().to_rfc3339(), format!("｜{detail}")],
+            rusqlite::params![
+                session_id,
+                state,
+                chrono::Local::now().to_rfc3339(),
+                format!("｜{detail}")
+            ],
         )
         .map_err(|e| e.to_string())?;
         Ok(())
@@ -533,7 +548,9 @@ mod tests {
             .any(|x| x.unwrap_or(false));
         assert!(has_col, "v1→v2 迁移必须补上 report_json 列");
         // 老数据仍在
-        let n: i64 = conn.query_row("SELECT COUNT(*) FROM experiments", [], |r| r.get(0)).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM experiments", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(n, 1);
     }
 }

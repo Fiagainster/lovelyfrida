@@ -214,8 +214,16 @@ pub fn list_brute_jobs(limit: i64) -> Result<Vec<BruteJobRow>, String> {
         .map_err(|e| e.to_string())?;
     let mut out = Vec::new();
     for row in rows {
-        let (id, case_name, engine, status, hit_value, candidates_total, self_test_passed, perf_note) =
-            row.map_err(|e| e.to_string())?;
+        let (
+            id,
+            case_name,
+            engine,
+            status,
+            hit_value,
+            candidates_total,
+            self_test_passed,
+            perf_note,
+        ) = row.map_err(|e| e.to_string())?;
         out.push(BruteJobRow {
             id,
             case_name,

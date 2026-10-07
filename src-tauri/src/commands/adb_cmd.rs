@@ -52,7 +52,11 @@ pub async fn adb_connect(
         "adb 连接",
         &format!("adb connect {host}:{port}"),
         serde_json::json!({"host": host, "port": port}),
-        if report.ok { format!("成功（{}）", report.state) } else { format!("失败（{}）", report.state) },
+        if report.ok {
+            format!("成功（{}）", report.state)
+        } else {
+            format!("失败（{}）", report.state)
+        },
         ms,
     )
     .await;
@@ -75,7 +79,11 @@ pub async fn adb_self_heal(
         "adb 自愈重连",
         &format!("adb disconnect {host}:{port} && adb connect {host}:{port}（×5）"),
         serde_json::json!({"host": host, "port": port, "attempts": report.attempts}),
-        if report.ok { "成功".into() } else { format!("失败（{} 轮）", report.attempts) },
+        if report.ok {
+            "成功".into()
+        } else {
+            format!("失败（{} 轮）", report.attempts)
+        },
         t0.elapsed().as_millis() as u64,
     )
     .await;

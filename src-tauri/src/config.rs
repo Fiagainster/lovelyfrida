@@ -103,7 +103,10 @@ pub fn init() -> Result<(), String> {
                     chrono::Local::now().format("%Y%m%d-%H%M%S")
                 ));
                 let _ = std::fs::rename(&path, &bak);
-                tracing::warn!("config.toml 解析失败（{e}），已备份到 {} 并重建默认配置", bak.display());
+                tracing::warn!(
+                    "config.toml 解析失败（{e}），已备份到 {} 并重建默认配置",
+                    bak.display()
+                );
                 let default = AppConfig::default();
                 persist(&default)?;
                 *cache().write().map_err(|e| e.to_string())? = default;
@@ -132,7 +135,10 @@ pub fn update(f: impl FnOnce(&mut AppConfig)) -> Result<AppConfig, String> {
 }
 
 fn validate(cfg: &AppConfig) -> Result<(), String> {
-    for (name, p) in [("workspace_root", &cfg.workspace_root), ("cases_root", &cfg.cases_root)] {
+    for (name, p) in [
+        ("workspace_root", &cfg.workspace_root),
+        ("cases_root", &cfg.cases_root),
+    ] {
         let t = p.trim();
         if t.is_empty() {
             continue;

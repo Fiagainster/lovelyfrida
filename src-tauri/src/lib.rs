@@ -41,7 +41,10 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(AppState::new())
-        .manage(services::session::FridaState::new(sidecar_launch, preferred_channel))
+        .manage(services::session::FridaState::new(
+            sidecar_launch,
+            preferred_channel,
+        ))
         .manage(services::terminal::TerminalMgr::default())
         .manage(services::recorder::RecorderState::default())
         .invoke_handler(tauri::generate_handler![
@@ -107,7 +110,12 @@ pub fn run() {
                 let state: State<AppState> = app.state();
                 if state
                     .shutdown_phase
-                    .compare_exchange(SHUTDOWN_IDLE, SHUTDOWN_WAITING, Ordering::SeqCst, Ordering::SeqCst)
+                    .compare_exchange(
+                        SHUTDOWN_IDLE,
+                        SHUTDOWN_WAITING,
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                    )
                     .is_ok()
                 {
                     let handle = app.clone();
@@ -168,7 +176,13 @@ pub fn graceful_shutdown(app: &tauri::AppHandle) {
         .swap(state::SHUTDOWN_SHUTTING, Ordering::SeqCst)
         == state::SHUTDOWN_SHUTTING;
     if !already {
-        audit::audit("shutdown", "app", "done", "close-handshake", "优雅关停：限时清理");
+        audit::audit(
+            "shutdown",
+            "app",
+            "done",
+            "close-handshake",
+            "优雅关停：限时清理",
+        );
     }
     let handle = app.clone();
     // 清理任务丢回 tokio runtime 正常跑（绝不从外部线程 block_on：Handle::block_on
@@ -183,11 +197,19 @@ pub fn graceful_shutdown(app: &tauri::AppHandle) {
         // sidecar/adb 客户端进程由 kill_on_drop + 进程退出兜底；设备端 frida-server
         // 保留（取证工具不假设下一次连接环境，设备侧状态由会话链路自行探测/拉起）。
         let frida = handle.state::<services::session::FridaState>();
-        let _ = tokio::time::timeout(Duration::from_secs(4), services::session::detach(&handle, &frida)).await;
+        let _ = tokio::time::timeout(
+            Duration::from_secs(4),
+            services::session::detach(&handle, &frida),
+        )
+        .await;
         let term = handle.state::<services::terminal::TerminalMgr>();
         let ids: Vec<u32> = term.sessions.lock().await.keys().copied().collect();
         for id in ids {
-            let _ = tokio::time::timeout(Duration::from_secs(2), services::terminal::close(handle.clone(), &term, id)).await;
+            let _ = tokio::time::timeout(
+                Duration::from_secs(2),
+                services::terminal::close(handle.clone(), &term, id),
+            )
+            .await;
         }
         done_task.store(true, std::sync::atomic::Ordering::SeqCst);
     });
@@ -195,7 +217,9 @@ pub fn graceful_shutdown(app: &tauri::AppHandle) {
     let done_watch = done.clone();
     std::thread::spawn(move || {
         let t0 = std::time::Instant::now();
-        while !done_watch.load(std::sync::atomic::Ordering::SeqCst) && t0.elapsed() < Duration::from_secs(8) {
+        while !done_watch.load(std::sync::atomic::Ordering::SeqCst)
+            && t0.elapsed() < Duration::from_secs(8)
+        {
             std::thread::sleep(Duration::from_millis(100));
         }
         let _ = handle_exit.exit(0);

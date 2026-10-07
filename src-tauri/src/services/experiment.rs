@@ -71,7 +71,10 @@ async fn write_device_file(
     use crate::services::device_shell::{sq, su_c};
     // device_name 会拼进本机 %TEMP% 文件名，必须先拦下宿主侧穿越（批次⑩）
     if !crate::services::device_shell::valid_filename(&f.device_name) {
-        return Err(format!("文件名不合法：{}（不得含路径分隔符）", f.device_name));
+        return Err(format!(
+            "文件名不合法：{}（不得含路径分隔符）",
+            f.device_name
+        ));
     }
     if !f.device_dir.starts_with('/') {
         return Err(format!("目标目录必须是设备绝对路径：{}", f.device_dir));
@@ -140,21 +143,30 @@ pub async fn run(
             device_dir: exp.device_file_dir.clone(),
             device_name: exp.device_file_name.clone(),
         };
-        if let Err(e) = write_device_file(&adb, &serial, &exp.package, &f, tpl.content.as_bytes()).await {
+        if let Err(e) =
+            write_device_file(&adb, &serial, &exp.package, &f, tpl.content.as_bytes()).await
+        {
             errors.push(format!("[{}] 写文件失败：{e}", tpl.name));
             continue;
         }
 
         // 2) 停应用（清场；脚本会话随之消失）
         let _ = adb
-            .shell(&serial, &format!("am force-stop {}", exp.package), Duration::from_secs(15))
+            .shell(
+                &serial,
+                &format!("am force-stop {}", exp.package),
+                Duration::from_secs(15),
+            )
             .await;
         tokio::time::sleep(Duration::from_millis(800)).await;
 
         // 3) forward（幂等，S-06 主机端口探测）
         let fwd = crate::services::session::forward_setup(cfg, &adb, &serial).await?;
         let conn = frida
-            .call("remote_connect", json!({"host": "127.0.0.1", "port": fwd.host_port}))
+            .call(
+                "remote_connect",
+                json!({"host": "127.0.0.1", "port": fwd.host_port}),
+            )
             .await?;
         let device = conn
             .get("key")
@@ -172,10 +184,14 @@ pub async fn run(
             .await
             .map_err(|e| format!("[{}] spawn 失败：{e}", tpl.name))?;
         let spawn_pid = spawn.get("pid").and_then(|v| v.as_u64()).unwrap_or(0);
-        let (session_id, script_id) =
-            crate::backends::frida::attach_and_load_core(frida, "127.0.0.1", fwd.host_port, json!(spawn_pid))
-                .await
-                .map_err(|e| format!("[{}] spawn 后附加失败：{e}", tpl.name))?;
+        let (session_id, script_id) = crate::backends::frida::attach_and_load_core(
+            frida,
+            "127.0.0.1",
+            fwd.host_port,
+            json!(spawn_pid),
+        )
+        .await
+        .map_err(|e| format!("[{}] spawn 后附加失败：{e}", tpl.name))?;
         let add = frida
             .call(
                 "rpc_call",
@@ -263,10 +279,13 @@ pub async fn run(
                 g.script_id = Some(script_id);
                 g.target = Some(format!("pid:{spawn_pid}"));
                 g.phase = crate::services::session::SessionPhase::Running;
-                crate::services::session::push_ev(&mut g, format!(
-                    "[实验 {}] spawn pid={spawn_pid} → 探针 {probe_status} → 命中 {hits}",
-                    tpl.name
-                ));
+                crate::services::session::push_ev(
+                    &mut g,
+                    format!(
+                        "[实验 {}] spawn pid={spawn_pid} → 探针 {probe_status} → 命中 {hits}",
+                        tpl.name
+                    ),
+                );
                 g.updated_at = chrono::Local::now().format("%H:%M:%S%.3f").to_string();
                 g.clone()
             };

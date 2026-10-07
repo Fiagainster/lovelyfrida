@@ -20,14 +20,24 @@ pub fn process_start() -> Instant {
 
 /// 敏感键（小写）。保守集合：不含 salt/key 这类本身常为公开的参数。
 const SENSITIVE_KEYS: &[&str] = &[
-    "password", "passwd", "pwd", "passphrase", "token", "secret", "credential", "apikey",
-    "api_key", "auth",
+    "password",
+    "passwd",
+    "pwd",
+    "passphrase",
+    "token",
+    "secret",
+    "credential",
+    "apikey",
+    "api_key",
+    "auth",
 ];
 
 fn eq_key_at(chars: &[char], pos: usize, key: &str) -> bool {
-    key.chars()
-        .enumerate()
-        .all(|(n, kc)| chars.get(pos + n).is_some_and(|c| c.to_ascii_lowercase() == kc))
+    key.chars().enumerate().all(|(n, kc)| {
+        chars
+            .get(pos + n)
+            .is_some_and(|c| c.to_ascii_lowercase() == kc)
+    })
 }
 
 /// 单 token 掩码：识别 `password=xxx` / `"password":"xxx"` 等形态。
@@ -167,7 +177,11 @@ fn writer(tx: std::sync::mpsc::Receiver<String>) {
                 let _ = std::fs::rename(&path, &rotated);
             }
         }
-        match std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        match std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
             Ok(mut f) => {
                 use std::io::Write;
                 if let Err(e) = writeln!(f, "{line}") {
@@ -214,7 +228,10 @@ mod tests {
     fn mask_covers_key_value_forms() {
         // 测试进程未 init config → get() 返回默认值，mask_secrets_in_logs=true
         assert_eq!(mask_secrets("password=Wei123123"), "password=***");
-        assert_eq!(mask_secrets("{\"password\":\"Wei123123\"}"), "{\"password\":\"***\"}");
+        assert_eq!(
+            mask_secrets("{\"password\":\"Wei123123\"}"),
+            "{\"password\":\"***\"}"
+        );
         assert_eq!(mask_secrets("token: abc123;"), "token: ***;");
         assert_eq!(mask_secrets("plain text stays"), "plain text stays");
         assert_eq!(mask_secrets("salt=abc untouched"), "salt=abc untouched");

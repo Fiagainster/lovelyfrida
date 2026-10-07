@@ -109,7 +109,13 @@ pub async fn create(
             line_buf: std::sync::Mutex::new(String::new()),
         }),
     );
-    crate::audit::audit("terminal_create", serial, "done", "terminal-drawer", &format!("term#{id}"));
+    crate::audit::audit(
+        "terminal_create",
+        serial,
+        "done",
+        "terminal-drawer",
+        &format!("term#{id}"),
+    );
     Ok(info)
 }
 
@@ -133,7 +139,8 @@ pub async fn write(
         let data = data.to_string();
         tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
             let mut w = t2.writer.lock().map_err(|_| "writer 忙")?;
-            w.write_all(data.as_bytes()).map_err(|e| format!("写入失败：{e}"))?;
+            w.write_all(data.as_bytes())
+                .map_err(|e| format!("写入失败：{e}"))?;
             w.flush().map_err(|e| format!("flush 失败：{e}"))?;
             Ok(())
         })
@@ -222,7 +229,13 @@ pub async fn close(app: tauri::AppHandle, mgr: &TerminalMgr, id: u32) -> Result<
             if let Ok(mut w) = s.writer.lock() {
                 let _ = w.flush();
             }
-            crate::audit::audit("terminal_close", &s.serial, "done", "terminal-drawer", &format!("term#{id}"));
+            crate::audit::audit(
+                "terminal_close",
+                &s.serial,
+                "done",
+                "terminal-drawer",
+                &format!("term#{id}"),
+            );
             let _ = app.emit("terminal-closed", json!({"id": id}));
             Ok(())
         }

@@ -357,7 +357,9 @@ pub async fn attach_and_load_core(
         .and_then(|k| k.as_str())
         .ok_or("remote_connect 未返回 device key")?
         .to_string();
-    let att = ch.call("attach", json!({"device": device, "target": target})).await?;
+    let att = ch
+        .call("attach", json!({"device": device, "target": target}))
+        .await?;
     let session_id = att
         .get("session_id")
         .and_then(|v| v.as_u64())
@@ -372,6 +374,7 @@ pub async fn attach_and_load_core(
         .get("script_id")
         .and_then(|v| v.as_u64())
         .ok_or("create_script 未返回 script_id")?;
-    ch.call("load_script", json!({"script_id": script_id})).await?;
+    ch.call("load_script", json!({"script_id": script_id}))
+        .await?;
     Ok((session_id, script_id))
 }

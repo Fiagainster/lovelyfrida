@@ -85,7 +85,16 @@ pub async fn run(cfg: &AppConfig, deep: bool) -> DoctorReport {
     }
 }
 
-fn result(id: &str, name: &str, status: &str, rule: &str, command: &str, evidence: Vec<String>, fix: Option<String>, ms: u64) -> CheckResult {
+fn result(
+    id: &str,
+    name: &str,
+    status: &str,
+    rule: &str,
+    command: &str,
+    evidence: Vec<String>,
+    fix: Option<String>,
+    ms: u64,
+) -> CheckResult {
     CheckResult {
         id: id.into(),
         name: name.into(),
@@ -141,13 +150,19 @@ async fn check_emulator(cfg: &AppConfig) -> CheckResult {
     evidence.push(format!(
         "端口探测 {:?}：{}",
         ports,
-        if listening.is_empty() { "全部未监听".into() } else { format!("监听中 {listening:?}") }
+        if listening.is_empty() {
+            "全部未监听".into()
+        } else {
+            format!("监听中 {listening:?}")
+        }
     ));
 
     let status = if !procs.is_empty() {
         "pass"
     } else if !listening.is_empty() {
-        evidence.push("⚠ 有端口监听但无 MuMu 进程（如 WinNAT 端口转发占用），不作为模拟器在跑的证据".into());
+        evidence.push(
+            "⚠ 有端口监听但无 MuMu 进程（如 WinNAT 端口转发占用），不作为模拟器在跑的证据".into(),
+        );
         "warn"
     } else {
         "fail"
@@ -174,7 +189,11 @@ async fn check_adb(cfg: &AppConfig) -> CheckResult {
     let t0 = std::time::Instant::now();
     match AdbBackend::detect(&cfg.adb_path, &cfg.doctor.adb_extra_paths).await {
         Ok(b) => {
-            let mut evidence: Vec<String> = vec![format!("选用：{}（来源：{}）", b.path().display(), b.source)];
+            let mut evidence: Vec<String> = vec![format!(
+                "选用：{}（来源：{}）",
+                b.path().display(),
+                b.source
+            )];
             for c in &b.candidates {
                 evidence.push(format!(
                     "  [{}] {} — {}",
@@ -210,7 +229,10 @@ async fn check_adb(cfg: &AppConfig) -> CheckResult {
 /// CHK-03 adb 能连（E-02 15s 硬超时 / E-03 offline 自愈 / S-05 假绿灯二次确认）。
 /// quick 模式只读设备现状（<1s）；deep 模式才主动 connect/自愈（兜底）。
 /// 返回 backend 与已连接 serial 供后续检查复用。
-async fn check_connect(cfg: &AppConfig, deep: bool) -> (CheckResult, Option<AdbBackend>, Option<String>) {
+async fn check_connect(
+    cfg: &AppConfig,
+    deep: bool,
+) -> (CheckResult, Option<AdbBackend>, Option<String>) {
     let t0 = std::time::Instant::now();
     let backend = match AdbBackend::detect(&cfg.adb_path, &cfg.doctor.adb_extra_paths).await {
         Ok(b) => b,
@@ -257,8 +279,14 @@ async fn check_connect(cfg: &AppConfig, deep: bool) -> (CheckResult, Option<AdbB
 
     // ---- quick 模式：到此为止，不主动 connect（慢操作留给深度体检兜底） ----
     if !deep {
-        let snapshot = if devices.is_empty() { "空".to_string() } else {
-            devices.iter().map(|d| format!("{}={}", d.serial, d.state)).collect::<Vec<_>>().join(", ")
+        let snapshot = if devices.is_empty() {
+            "空".to_string()
+        } else {
+            devices
+                .iter()
+                .map(|d| format!("{}={}", d.serial, d.state))
+                .collect::<Vec<_>>()
+                .join(", ")
         };
         let has_offline = devices.iter().any(|d| d.state == "offline");
         let hint = if has_offline {
@@ -306,8 +334,14 @@ async fn check_connect(cfg: &AppConfig, deep: bool) -> (CheckResult, Option<AdbB
 
     let mut tried: Vec<String> = vec![format!(
         "devices 快照：{}",
-        if devices.is_empty() { "空".into() } else {
-            devices.iter().map(|d| format!("{}={}", d.serial, d.state)).collect::<Vec<_>>().join(", ")
+        if devices.is_empty() {
+            "空".into()
+        } else {
+            devices
+                .iter()
+                .map(|d| format!("{}={}", d.serial, d.state))
+                .collect::<Vec<_>>()
+                .join(", ")
         }
     )];
     for host_port in ports {
@@ -340,7 +374,12 @@ async fn check_connect(cfg: &AppConfig, deep: bool) -> (CheckResult, Option<AdbB
 
     tried.push(format!(
         "✖ 尝试过全部端口 {} 均未连上（U1 要求：失败时列出试过端口与结果）",
-        cfg.doctor.emulator_ports.iter().map(|p| p.to_string()).collect::<Vec<_>>().join("/")
+        cfg.doctor
+            .emulator_ports
+            .iter()
+            .map(|p| p.to_string())
+            .collect::<Vec<_>>()
+            .join("/")
     ));
     (
         result(
@@ -395,8 +434,14 @@ async fn check_root(backend: &Option<AdbBackend>, serial: &Option<String>) -> Ch
                         "pass",
                         "E-06",
                         "adb shell su -c id",
-                        vec![format!("adb shell id → {text}"), format!("su -c id → {su_text}")],
-                        Some("adb 非 root，但 su 可用：写操作将走 su -c（注意只能单引号，D-02）".into()),
+                        vec![
+                            format!("adb shell id → {text}"),
+                            format!("su -c id → {su_text}"),
+                        ],
+                        Some(
+                            "adb 非 root，但 su 可用：写操作将走 su -c（注意只能单引号，D-02）"
+                                .into(),
+                        ),
                         t0.elapsed().as_millis() as u64,
                     )
                 } else {
@@ -442,9 +487,15 @@ async fn check_selinux(backend: &Option<AdbBackend>, serial: &Option<String>) ->
                 "PERMISSIVE" => ("pass", None),
                 "ENFORCING" => (
                     "warn",
-                    Some("Enforcing：数据回灌第⑥步必须 restorecon 刷标签（D-04，向导会自动执行）".to_string()),
+                    Some(
+                        "Enforcing：数据回灌第⑥步必须 restorecon 刷标签（D-04，向导会自动执行）"
+                            .to_string(),
+                    ),
                 ),
-                _ => ("warn", Some("getenforce 输出无法识别，SELinux 状态未知".to_string())),
+                _ => (
+                    "warn",
+                    Some("getenforce 输出无法识别，SELinux 状态未知".to_string()),
+                ),
             };
             result(
                 "CHK-05",
@@ -452,7 +503,10 @@ async fn check_selinux(backend: &Option<AdbBackend>, serial: &Option<String>) ->
                 status,
                 "E-07",
                 "adb shell getenforce",
-                vec![format!("getenforce → {}", if mode.is_empty() { "（空）" } else { &mode })],
+                vec![format!(
+                    "getenforce → {}",
+                    if mode.is_empty() { "（空）" } else { &mode }
+                )],
                 fix,
                 t0.elapsed().as_millis() as u64,
             )
@@ -480,7 +534,11 @@ async fn check_abi(backend: &Option<AdbBackend>, serial: &Option<String>) -> Che
         return skip("CHK-06", "目标 ABI", "⊘ 无已连接设备", t0);
     };
     match b
-        .shell(serial, "getprop ro.product.cpu.abi", Duration::from_secs(10))
+        .shell(
+            serial,
+            "getprop ro.product.cpu.abi",
+            Duration::from_secs(10),
+        )
         .await
     {
         Ok(o) => {
@@ -490,7 +548,9 @@ async fn check_abi(backend: &Option<AdbBackend>, serial: &Option<String>) -> Che
                 "" => ("warn", Some("getprop 无输出，ABI 未知".to_string())),
                 _ => (
                     "warn",
-                    Some(format!("ABI={abi}：x86/armeabi 只提示不预置 frida-server（文档02 兼容矩阵）")),
+                    Some(format!(
+                        "ABI={abi}：x86/armeabi 只提示不预置 frida-server（文档02 兼容矩阵）"
+                    )),
                 ),
             };
             result(
@@ -499,7 +559,10 @@ async fn check_abi(backend: &Option<AdbBackend>, serial: &Option<String>) -> Che
                 status,
                 "E-08",
                 "adb shell getprop ro.product.cpu.abi",
-                vec![format!("ro.product.cpu.abi = {}", if abi.is_empty() { "（空）" } else { &abi })],
+                vec![format!(
+                    "ro.product.cpu.abi = {}",
+                    if abi.is_empty() { "（空）" } else { &abi }
+                )],
                 fix,
                 t0.elapsed().as_millis() as u64,
             )
@@ -520,7 +583,9 @@ async fn check_abi(backend: &Option<AdbBackend>, serial: &Option<String>) -> Che
 /// CHK-07 本机 frida 客户端版本（S-01 三处一致之一）。
 async fn check_frida_client() -> CheckResult {
     let t0 = std::time::Instant::now();
-    match crate::backends::adb::run_raw(Path::new("frida"), &["--version"], Duration::from_secs(10)).await {
+    match crate::backends::adb::run_raw(Path::new("frida"), &["--version"], Duration::from_secs(10))
+        .await
+    {
         Ok(o) if !o.timed_out && !o.stdout.trim().is_empty() => {
             let v = o.stdout.trim().to_string();
             result(
@@ -589,8 +654,14 @@ async fn check_version_matrix(
         format!("① 客户端：{client_version}"),
         format!(
             "② 矩阵（bin 随包 + 工作区按需下载）：{}",
-            if versions.is_empty() { "空".into() } else {
-                let mut s = if bundled.is_empty() { "bin 空".to_string() } else { bundled.join(", ") };
+            if versions.is_empty() {
+                "空".into()
+            } else {
+                let mut s = if bundled.is_empty() {
+                    "bin 空".to_string()
+                } else {
+                    bundled.join(", ")
+                };
                 if !downloaded.is_empty() {
                     s.push_str(&format!("；工作区下载：{}", downloaded.join(", ")));
                 }
@@ -616,7 +687,11 @@ async fn check_version_matrix(
                     .collect();
                 device_leg = format!(
                     "③ 设备端 /data/local/tmp：{}",
-                    if files.is_empty() { "无 frida 相关文件".into() } else { files.join(", ") }
+                    if files.is_empty() {
+                        "无 frida 相关文件".into()
+                    } else {
+                        files.join(", ")
+                    }
                 );
                 device_ok = !files.is_empty();
             }
@@ -627,7 +702,8 @@ async fn check_version_matrix(
     }
     evidence.push(device_leg);
 
-    let matrix_has_client = !client_version.is_empty() && versions.iter().any(|v| v == &client_version);
+    let matrix_has_client =
+        !client_version.is_empty() && versions.iter().any(|v| v == &client_version);
     let (status, fix) = if client_version.is_empty() {
         ("warn", Some("先解决 CHK-07（客户端缺失）".into()))
     } else if !matrix_has_client {
@@ -675,7 +751,10 @@ async fn check_version_matrix(
             }
             None => (
                 "warn",
-                Some("设备端文件已存在但未运行（--version 无输出）：会话链路将自动启动匹配版本".into()),
+                Some(
+                    "设备端文件已存在但未运行（--version 无输出）：会话链路将自动启动匹配版本"
+                        .into(),
+                ),
             ),
         }
     } else {
@@ -696,14 +775,22 @@ async fn check_version_matrix(
 /// CHK-09 27042 端口：设备端实测监听（S-02/S-05）+ 本机占用（S-06）。
 /// CHK-09 frida 端口：设备端实测监听（S-02/S-05）+ 本机占用（S-06）。
 /// 端口读配置（A4a：不再写死 27042）。
-async fn check_port(backend: &Option<AdbBackend>, serial: &Option<String>, port: u16) -> CheckResult {
+async fn check_port(
+    backend: &Option<AdbBackend>,
+    serial: &Option<String>,
+    port: u16,
+) -> CheckResult {
     let t0 = std::time::Instant::now();
     let mut evidence: Vec<String> = Vec::new();
     let mut device_leg_done = false;
 
     if let (Some(b), Some(s)) = (backend, serial) {
         let out = b
-            .shell(s, &format!("ss -tlnp 2>/dev/null | grep :{port} || echo NO_LISTENER"), Duration::from_secs(10))
+            .shell(
+                s,
+                &format!("ss -tlnp 2>/dev/null | grep :{port} || echo NO_LISTENER"),
+                Duration::from_secs(10),
+            )
             .await;
         match out {
             Ok(o) => {
@@ -711,7 +798,9 @@ async fn check_port(backend: &Option<AdbBackend>, serial: &Option<String>, port:
                 if text.contains(&port.to_string()) && !text.contains("NO_LISTENER") {
                     evidence.push(format!("✔ 设备端 {port} 实测监听中：{text}"));
                 } else {
-                    evidence.push(format!("✖ 设备端 {port} 未监听（frida-server 未启动，会话链路负责启动）"));
+                    evidence.push(format!(
+                        "✖ 设备端 {port} 未监听（frida-server 未启动，会话链路负责启动）"
+                    ));
                 }
                 device_leg_done = true;
             }
@@ -724,7 +813,9 @@ async fn check_port(backend: &Option<AdbBackend>, serial: &Option<String>, port:
         .await
         .is_ok();
     if host_occupied {
-        evidence.push(format!("⚠ 本机 127.0.0.1:{port} 已被占用（S-06：forward 时将自动改用备用端口）"));
+        evidence.push(format!(
+            "⚠ 本机 127.0.0.1:{port} 已被占用（S-06：forward 时将自动改用备用端口）"
+        ));
     } else {
         evidence.push(format!("本机 {port} 空闲"));
     }
@@ -732,14 +823,21 @@ async fn check_port(backend: &Option<AdbBackend>, serial: &Option<String>, port:
     let status = if !device_leg_done {
         "skip"
     } else if evidence.iter().any(|e| e.starts_with("✔")) {
-        if host_occupied { "warn" } else { "pass" }
+        if host_occupied {
+            "warn"
+        } else {
+            "pass"
+        }
     } else if evidence.iter().any(|e| e.starts_with("✖")) {
         "warn"
     } else {
         "warn"
     };
     let fix = if evidence.iter().any(|e| e.starts_with("✖")) {
-        Some("frida-server 未启动：会话链路提供「安装并启动」动作（假绿灯以 ss -tlnp 为准，S-05）".into())
+        Some(
+            "frida-server 未启动：会话链路提供「安装并启动」动作（假绿灯以 ss -tlnp 为准，S-05）"
+                .into(),
+        )
     } else {
         None
     };
@@ -788,7 +886,11 @@ fn check_storage(cfg: &AppConfig) -> CheckResult {
         Some(gb) => {
             evidence.push(format!(
                 "{} 剩余 {gb:.1} GB",
-                root.display().to_string().chars().take(3).collect::<String>()
+                root.display()
+                    .to_string()
+                    .chars()
+                    .take(3)
+                    .collect::<String>()
             ));
             if gb < 1.0 {
                 ok = false;

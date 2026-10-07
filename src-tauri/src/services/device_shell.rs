@@ -15,7 +15,8 @@
 pub fn valid_package(p: &str) -> bool {
     !p.is_empty()
         && p.len() <= 200
-        && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+        && p.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
 }
 
 /// 纯文件名校验：非空、非 "."/".."、不含路径分隔符与 NUL、≤255 字节（ext4 上限）。
@@ -96,7 +97,10 @@ mod tests {
         assert_eq!(sq("/data/data/com.x/files"), "'/data/data/com.x/files'");
         assert_eq!(sq("a'b"), "'a'\\''b'");
         assert_eq!(sq(""), "''");
-        assert_eq!(sq("$(rm -rf /); `x` \"q\" \\ "), "'$(rm -rf /); `x` \"q\" \\ '");
+        assert_eq!(
+            sq("$(rm -rf /); `x` \"q\" \\ "),
+            "'$(rm -rf /); `x` \"q\" \\ '"
+        );
     }
 
     #[test]
@@ -106,8 +110,16 @@ mod tests {
         let inner = format!("mkdir -p {}", sq(dir));
         let outer = su_c(&inner);
         let t1 = tokenize(&outer);
-        assert_eq!(t1, vec!["su", "-c", &inner], "外层解析应把整条内层命令还原为单个 argv");
-        assert_eq!(tokenize(&inner), vec!["mkdir", "-p", dir], "内层解析应还原出原始路径");
+        assert_eq!(
+            t1,
+            vec!["su", "-c", &inner],
+            "外层解析应把整条内层命令还原为单个 argv"
+        );
+        assert_eq!(
+            tokenize(&inner),
+            vec!["mkdir", "-p", dir],
+            "内层解析应还原出原始路径"
+        );
     }
 
     #[test]
@@ -130,7 +142,11 @@ mod tests {
             assert_eq!(t1[1], "-c");
             assert_eq!(t1[2], inner, "内层命令必须完整保留在单个 argv 内");
             let t2 = tokenize(&inner);
-            assert_eq!(t2.len(), 3, "内层必须仍是 3 个 argv（元字符不得拆分命令）：{inner}");
+            assert_eq!(
+                t2.len(),
+                3,
+                "内层必须仍是 3 个 argv（元字符不得拆分命令）：{inner}"
+            );
             assert_eq!(t2[0], "mkdir");
             assert_eq!(t2[1], "-p");
             assert_eq!(t2[2], dir, "第三个 argv 的内容必须与原始输入逐字一致");
@@ -139,13 +155,30 @@ mod tests {
 
     #[test]
     fn valid_package_白名单() {
-        let ok = ["com.notevault.app", "a.b", "A1.b_2.C", "frida-server", "_x", "com.0a"];
+        let ok = [
+            "com.notevault.app",
+            "a.b",
+            "A1.b_2.C",
+            "frida-server",
+            "_x",
+            "com.0a",
+        ];
         for p in ok {
             assert!(valid_package(p), "应放行：{p}");
         }
         let bad = [
-            "", "com x", "com;x", "com'x", "com\"x", "com$x", "com`x`", "../x", "com/x",
-            "com\nx", "com应用", "a;b|c&d",
+            "",
+            "com x",
+            "com;x",
+            "com'x",
+            "com\"x",
+            "com$x",
+            "com`x`",
+            "../x",
+            "com/x",
+            "com\nx",
+            "com应用",
+            "a;b|c&d",
         ];
         for p in bad {
             assert!(!valid_package(p), "应拒绝：{p}");
@@ -159,7 +192,16 @@ mod tests {
         for f in ok {
             assert!(valid_filename(f), "应放行：{f}");
         }
-        let bad = ["", ".", "..", "a/b", "a\\b", "..\\x", "x\0y", "../../etc/passwd"];
+        let bad = [
+            "",
+            ".",
+            "..",
+            "a/b",
+            "a\\b",
+            "..\\x",
+            "x\0y",
+            "../../etc/passwd",
+        ];
         for f in bad {
             assert!(!valid_filename(f), "应拒绝：{f}");
         }

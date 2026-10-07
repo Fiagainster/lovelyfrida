@@ -108,7 +108,9 @@ pub async fn export(state: &RecorderState, format: &str) -> Result<ExportResult,
                 }
             }
             "md" => {
-                content.push_str("# LovelyFrida 操作记录\n\n> 由 Recorder v1 自动生成，可直接粘入笔记。\n\n");
+                content.push_str(
+                    "# LovelyFrida 操作记录\n\n> 由 Recorder v1 自动生成，可直接粘入笔记。\n\n",
+                );
                 for (i, s) in steps.iter().enumerate() {
                     content.push_str(&format!(
                         "## {}. {}\n\n- 时间：`{}`\n- 耗时：{}ms\n- 结果：{}\n\n```sh\n{}\n```\n\n【截图位 {}-1】\n\n",
@@ -133,7 +135,13 @@ pub async fn export(state: &RecorderState, format: &str) -> Result<ExportResult,
         .await
         .map_err(|e| format!("后台任务失败：{e}"))?
         .map_err(|e| e.to_string())?;
-    crate::audit::audit("recorder_export", &path.display().to_string(), "done", "recorder", format);
+    crate::audit::audit(
+        "recorder_export",
+        &path.display().to_string(),
+        "done",
+        "recorder",
+        format,
+    );
     Ok(ExportResult {
         path: path.display().to_string(),
         count,

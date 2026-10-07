@@ -5,8 +5,8 @@ use crate::backends::frida::{attach_and_load_core, FridaChannelB, FridaEvent};
 use crate::config::AppConfig;
 use serde::Serialize;
 use serde_json::{json, Value};
-use tauri::{Emitter, Manager, State};
 use std::time::Duration;
+use tauri::{Emitter, Manager, State};
 use tokio::sync::Mutex;
 
 /// 会话阶段（文档02§五 的 M1 可用子集；APP_INSTALLED/DATA_INJECTED 由 M3 回灌写入）
@@ -103,7 +103,11 @@ pub(crate) fn extend_ev(s: &mut SessionSnapshot, msgs: impl IntoIterator<Item = 
 }
 
 /// frida-server 二进制定位：随包 bin/ 矩阵优先，工作区按需下载（C1）兜底
-pub fn find_server_binary(cfg: &AppConfig, version: &str, abi_dir: &str) -> Option<std::path::PathBuf> {
+pub fn find_server_binary(
+    cfg: &AppConfig,
+    version: &str,
+    abi_dir: &str,
+) -> Option<std::path::PathBuf> {
     let bundled = crate::paths::frida_server_matrix_dir()
         .join(version)
         .join(format!("android-{abi_dir}"))
@@ -130,7 +134,11 @@ fn abi_to_dirname(abi: &str) -> &str {
 }
 
 fn step(name: &str, status: &str, evidence: Vec<String>) -> StepReport {
-    StepReport { name: name.into(), status: status.into(), evidence }
+    StepReport {
+        name: name.into(),
+        status: status.into(),
+        evidence,
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -165,7 +173,10 @@ pub async fn server_status(cfg: &AppConfig, frida: &FridaChannelB) -> ServerStat
         AdbBackend::detect(&cfg.adb_path, &cfg.doctor.adb_extra_paths),
     );
     let (client_version, client_error) = match hello_res {
-        Ok(v) => (v.get("frida").and_then(|s| s.as_str()).map(String::from), None),
+        Ok(v) => (
+            v.get("frida").and_then(|s| s.as_str()).map(String::from),
+            None,
+        ),
         Err(e) => (None, Some(e)),
     };
     let adb = adb_res.ok();
@@ -173,7 +184,10 @@ pub async fn server_status(cfg: &AppConfig, frida: &FridaChannelB) -> ServerStat
         Some(a) => a.devices().await.unwrap_or_default(),
         None => Vec::new(),
     };
-    let serial = devices.iter().find(|d| d.state == "device").map(|d| d.serial.clone());
+    let serial = devices
+        .iter()
+        .find(|d| d.state == "device")
+        .map(|d| d.serial.clone());
 
     let mut device_server_present: Option<bool> = None;
     let mut device_server_version: Option<String> = None;
@@ -257,13 +271,19 @@ async fn port_listening(adb: &AdbBackend, serial: &str, port: u16) -> bool {
 }
 
 /// 安装并启动 frida-server（幂等：先清残留再建立；每步留证据，S-01/S-02/S-03/S-05）
-pub async fn server_install(cfg: &AppConfig, frida: &FridaChannelB) -> Result<Vec<StepReport>, String> {
+pub async fn server_install(
+    cfg: &AppConfig,
+    frida: &FridaChannelB,
+) -> Result<Vec<StepReport>, String> {
     let mut steps: Vec<StepReport> = Vec::new();
     let port = cfg.frida_port;
 
     let adb = AdbBackend::detect(&cfg.adb_path, &cfg.doctor.adb_extra_paths).await?;
     let devices = adb.devices().await?;
-    let Some(serial) = devices.iter().find(|d| d.state == "device").map(|d| d.serial.clone())
+    let Some(serial) = devices
+        .iter()
+        .find(|d| d.state == "device")
+        .map(|d| d.serial.clone())
     else {
         return Err("无 device 状态设备：请先连接模拟器（设备连接面板）".into());
     };
@@ -277,7 +297,11 @@ pub async fn server_install(cfg: &AppConfig, frida: &FridaChannelB) -> Result<Ve
         .ok_or("sidecar 未返回 frida 版本")?
         .to_string();
     let abi_out = adb
-        .shell(&serial, "getprop ro.product.cpu.abi", Duration::from_secs(10))
+        .shell(
+            &serial,
+            "getprop ro.product.cpu.abi",
+            Duration::from_secs(10),
+        )
         .await?;
     let abi = abi_out.stdout.trim().to_string();
     let dirname = abi_to_dirname(&abi);
@@ -286,36 +310,65 @@ pub async fn server_install(cfg: &AppConfig, frida: &FridaChannelB) -> Result<Ve
             "frida-server {client_version}（android-{dirname}）在 bin 矩阵与工作区均缺失（S-01 三处一致）：体检页「下载 frida-server」可按需获取（C1）。设备 ABI={abi}"
         )
     })?;
-    steps.push(step("版本匹配", "pass", vec![
-        format!("客户端 {client_version} ↔ 矩阵 {} ({dirname})", client_version),
-        format!("设备 ABI = {abi}"),
-    ]));
+    steps.push(step(
+        "版本匹配",
+        "pass",
+        vec![
+            format!(
+                "客户端 {client_version} ↔ 矩阵 {} ({dirname})",
+                client_version
+            ),
+            format!("设备 ABI = {abi}"),
+        ],
+    ));
 
     // ② 清残留（幂等，S-03；[f] 自匹配技巧收敛在 adb.pkill_residue，A4b）
     let kill = adb.pkill_residue(&serial, "frida-server").await;
-    steps.push(step("清理残留", "pass", vec![format!(
-        "pkill 已执行（{}）",
-        kill.map(|o| o.stdout.trim().to_string()).unwrap_or_else(|e| e)
-    )]));
+    steps.push(step(
+        "清理残留",
+        "pass",
+        vec![format!(
+            "pkill 已执行（{}）",
+            kill.map(|o| o.stdout.trim().to_string())
+                .unwrap_or_else(|e| e)
+        )],
+    ));
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // ③ 推送
     let push = adb
-        .push(&serial, &local.display().to_string(), "/data/local/tmp/frida-server", Duration::from_secs(180))
+        .push(
+            &serial,
+            &local.display().to_string(),
+            "/data/local/tmp/frida-server",
+            Duration::from_secs(180),
+        )
         .await?;
     if push.timed_out {
         return Err(format!("push 超时：{}", push.stderr));
     }
-    steps.push(step("推送 frida-server", "pass", vec![
-        format!("{} → /data/local/tmp/frida-server", local.display()),
-        push.stdout.trim().to_string(),
-    ]));
+    steps.push(step(
+        "推送 frida-server",
+        "pass",
+        vec![
+            format!("{} → /data/local/tmp/frida-server", local.display()),
+            push.stdout.trim().to_string(),
+        ],
+    ));
 
     // ④ chmod + 属主（root 场景直接 755）
-    adb.shell(&serial, "su -c 'chmod 755 /data/local/tmp/frida-server'", Duration::from_secs(10))
-        .await
-        .map_err(|e| format!("chmod 失败：{e}"))?;
-    steps.push(step("chmod 755", "pass", vec!["/data/local/tmp/frida-server".into()]));
+    adb.shell(
+        &serial,
+        "su -c 'chmod 755 /data/local/tmp/frida-server'",
+        Duration::from_secs(10),
+    )
+    .await
+    .map_err(|e| format!("chmod 失败：{e}"))?;
+    steps.push(step(
+        "chmod 755",
+        "pass",
+        vec!["/data/local/tmp/frida-server".into()],
+    ));
 
     // ⑤ 启动（nohup + 后台，防 SIGHUP，S-02/S-03 常驻托管的第一层；进程守护在会话层持续校验）
     adb.shell(
@@ -325,21 +378,39 @@ pub async fn server_install(cfg: &AppConfig, frida: &FridaChannelB) -> Result<Ve
     )
     .await
     .map_err(|e| format!("启动失败：{e}"))?;
-    steps.push(step("启动", "pass", vec!["su -c nohup /data/local/tmp/frida-server &".into()]));
+    steps.push(step(
+        "启动",
+        "pass",
+        vec!["su -c nohup /data/local/tmp/frida-server &".into()],
+    ));
 
     // ⑥ 实测监听（S-05：假绿灯防护，以 ss -tlnp 为准）
     tokio::time::sleep(Duration::from_millis(1200)).await;
     if port_listening(&adb, &serial, port).await {
-        steps.push(step("实测监听", "pass", vec![format!("设备端 :{port} 正在监听")]));
+        steps.push(step(
+            "实测监听",
+            "pass",
+            vec![format!("设备端 :{port} 正在监听")],
+        ));
     } else {
-        steps.push(step("实测监听", "fail", vec![
-            format!("启动命令已执行但 :{port} 未监听（S-05）"),
-            "常见原因：SELinux Enforcing 拦截、ABI 不匹配、旧进程未退出".into(),
-        ]));
+        steps.push(step(
+            "实测监听",
+            "fail",
+            vec![
+                format!("启动命令已执行但 :{port} 未监听（S-05）"),
+                "常见原因：SELinux Enforcing 拦截、ABI 不匹配、旧进程未退出".into(),
+            ],
+        ));
         return Ok(steps);
     }
 
-    crate::audit::audit("frida_server_install", &serial, "done", "session-console", &format!("v{client_version}"));
+    crate::audit::audit(
+        "frida_server_install",
+        &serial,
+        "done",
+        "session-console",
+        &format!("v{client_version}"),
+    );
     Ok(steps)
 }
 
@@ -351,7 +422,9 @@ pub struct ForwardInfo {
 }
 
 async fn bind_ok(port: u16) -> bool {
-    tokio::net::TcpListener::bind(("127.0.0.1", port)).await.is_ok()
+    tokio::net::TcpListener::bind(("127.0.0.1", port))
+        .await
+        .is_ok()
 }
 
 async fn find_bindable_host_port(start: u16) -> Option<u16> {
@@ -371,7 +444,11 @@ async fn find_bindable_host_port(start: u16) -> Option<u16> {
     None
 }
 
-pub async fn forward_setup(cfg: &AppConfig, adb: &AdbBackend, serial: &str) -> Result<ForwardInfo, String> {
+pub async fn forward_setup(
+    cfg: &AppConfig,
+    adb: &AdbBackend,
+    serial: &str,
+) -> Result<ForwardInfo, String> {
     let device_port = cfg.frida_port;
     let host_port = if bind_ok(device_port).await {
         device_port
@@ -381,25 +458,47 @@ pub async fn forward_setup(cfg: &AppConfig, adb: &AdbBackend, serial: &str) -> R
             .ok_or("主机侧无可绑定端口（WinNAT 保留段覆盖过宽）：请在设置中调整 frida_port")?
     };
     adb.run(
-        &["-s", serial, "forward", &format!("tcp:{host_port}"), &format!("tcp:{device_port}")],
+        &[
+            "-s",
+            serial,
+            "forward",
+            &format!("tcp:{host_port}"),
+            &format!("tcp:{device_port}"),
+        ],
         Duration::from_secs(10),
     )
     .await
     .map_err(|e| format!("forward 失败：{e}"))?;
-    let list = adb.run(&["-s", serial, "forward", "--list"], Duration::from_secs(10)).await?;
+    let list = adb
+        .run(
+            &["-s", serial, "forward", "--list"],
+            Duration::from_secs(10),
+        )
+        .await?;
     let listed = list.stdout.contains(&format!("tcp:{host_port}"));
     // 端到端验证：本机 TCP 直连主机侧端口
-    let reachable = tokio::net::TcpStream::connect(("127.0.0.1", host_port)).await.is_ok();
+    let reachable = tokio::net::TcpStream::connect(("127.0.0.1", host_port))
+        .await
+        .is_ok();
     let (status, evidence): (&str, Vec<String>) = if listed && reachable {
         (
             "pass",
             vec![format!(
                 "adb forward tcp:{host_port}→tcp:{device_port} 已建立并实测可连通{}",
-                if host_port != device_port { "（主机侧端口自动替换，S-06）" } else { "" }
+                if host_port != device_port {
+                    "（主机侧端口自动替换，S-06）"
+                } else {
+                    ""
+                }
             )],
         )
     } else if listed {
-        ("warn", vec![format!("forward 已登记但 127.0.0.1:{host_port} 连不通（frida-server 未运行？）")])
+        (
+            "warn",
+            vec![format!(
+                "forward 已登记但 127.0.0.1:{host_port} 连不通（frida-server 未运行？）"
+            )],
+        )
     } else {
         ("fail", vec!["forward --list 中未找到登记项".to_string()])
     };
@@ -427,9 +526,18 @@ pub async fn attach(
         let _ = app.emit("session-state", s.clone());
     }
 
-    let adb = attach_step(app, state, AdbBackend::detect(&cfg.adb_path, &cfg.doctor.adb_extra_paths).await, "adb 探测失败").await?;
+    let adb = attach_step(
+        app,
+        state,
+        AdbBackend::detect(&cfg.adb_path, &cfg.doctor.adb_extra_paths).await,
+        "adb 探测失败",
+    )
+    .await?;
     let devices = attach_step(app, state, adb.devices().await, "枚举设备失败").await?;
-    let Some(serial) = devices.iter().find(|d| d.state == "device").map(|d| d.serial.clone())
+    let Some(serial) = devices
+        .iter()
+        .find(|d| d.state == "device")
+        .map(|d| d.serial.clone())
     else {
         return fail(app, state, "无 device 状态设备").await;
     };
@@ -445,10 +553,19 @@ pub async fn attach(
     if !port_listening(&adb, &serial, cfg.frida_port).await {
         let _ = app.emit("session-state", {
             let mut s = state.session.lock().await;
-            push_ev(&mut s, format!("设备端 :{} 未监听 → 自动执行安装链", cfg.frida_port));
+            push_ev(
+                &mut s,
+                format!("设备端 :{} 未监听 → 自动执行安装链", cfg.frida_port),
+            );
             s.clone()
         });
-        let steps = attach_step(app, state, server_install(cfg, &state.channel).await, "frida-server 安装链执行失败").await?;
+        let steps = attach_step(
+            app,
+            state,
+            server_install(cfg, &state.channel).await,
+            "frida-server 安装链执行失败",
+        )
+        .await?;
         if steps.iter().any(|s| s.status == "fail") {
             return fail(app, state, "frida-server 自动安装失败（见安装报告）").await;
         }
@@ -460,7 +577,13 @@ pub async fn attach(
         let _ = app.emit("session-state", s.clone());
     }
 
-    let fwd = attach_step(app, state, forward_setup(cfg, &adb, &serial).await, "adb forward 建立失败").await?;
+    let fwd = attach_step(
+        app,
+        state,
+        forward_setup(cfg, &adb, &serial).await,
+        "adb forward 建立失败",
+    )
+    .await?;
     if fwd.step.status == "fail" {
         return fail(app, state, "adb forward 建立失败").await;
     }
@@ -521,7 +644,12 @@ pub async fn attach(
             state,
             state
                 .channel_c
-                .attach_and_load(app.clone(), "127.0.0.1", host_port, &target_display(&target))
+                .attach_and_load(
+                    app.clone(),
+                    "127.0.0.1",
+                    host_port,
+                    &target_display(&target),
+                )
                 .await,
             "通道C 附加失败",
         )
@@ -551,7 +679,13 @@ pub async fn attach(
 
     // ---- 通道 B ----
     // 事件订阅必须在 attach 之前建立（broadcast 不回放历史）
-    let rx = attach_step(app, state, state.channel.subscribe().await, "事件通道订阅失败").await?;
+    let rx = attach_step(
+        app,
+        state,
+        state.channel.subscribe().await,
+        "事件通道订阅失败",
+    )
+    .await?;
     let (session_id, script_id) = attach_step(
         app,
         state,
@@ -566,9 +700,10 @@ pub async fn attach(
         s.session_id = Some(session_id);
         s.script_id = Some(script_id);
         s.target = Some(target_display(&target));
-        push_ev(&mut s, format!(
-            "attach 成功 session#{session_id}，core agent 已加载 script#{script_id}"
-        ));
+        push_ev(
+            &mut s,
+            format!("attach 成功 session#{session_id}，core agent 已加载 script#{script_id}"),
+        );
         let _ = app.emit("session-state", s.clone());
     }
 
@@ -601,7 +736,12 @@ async fn wait_hello(
     loop {
         let now = tokio::time::Instant::now();
         if now >= deadline {
-            return fail(app, state, "core agent 加载后 6s 内未收到 hello（注入成功判据失败）").await;
+            return fail(
+                app,
+                state,
+                "core agent 加载后 6s 内未收到 hello（注入成功判据失败）",
+            )
+            .await;
         }
         match tokio::time::timeout(deadline - now, rx.recv()).await {
             Err(_elapsed) => {
@@ -610,9 +750,19 @@ async fn wait_hello(
             Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
             Ok(Err(_)) => return fail(app, state, "事件通道关闭").await,
             Ok(Ok(ev)) => {
-                if let FridaEvent::Message { script_id: sid, kind, payload, .. } = &ev {
+                if let FridaEvent::Message {
+                    script_id: sid,
+                    kind,
+                    payload,
+                    ..
+                } = &ev
+                {
                     if *sid == script_id && kind == "send" {
-                        if let Some(t) = payload.as_ref().and_then(|p| p.get("t")).and_then(|t| t.as_str()) {
+                        if let Some(t) = payload
+                            .as_ref()
+                            .and_then(|p| p.get("t"))
+                            .and_then(|t| t.as_str())
+                        {
                             if t == "hello" {
                                 // agent 协议版本对账（批次⑪④）：core.js 内嵌于 Rust 二进制、
                                 // sidecar exe 独立分发，升级节奏不同——错配此前只会以字段缺失
@@ -622,14 +772,17 @@ async fn wait_hello(
                                     .and_then(|p| p.get("proto"))
                                     .and_then(|v| v.as_u64())
                                 {
-                                    Some(v) if v == crate::backends::frida::AGENT_PROTO_VERSION => {}
+                                    Some(v) if v == crate::backends::frida::AGENT_PROTO_VERSION => {
+                                    }
                                     Some(other) => {
                                         tracing::warn!("[session] agent proto={other} 高于宿主支持的 {}——未知字段将被忽略", crate::backends::frida::AGENT_PROTO_VERSION);
                                         let mut s = state.session.lock().await;
                                         push_ev(&mut s, format!("⚠ agent 协议版本 proto={other} 高于宿主支持的 {}，建议同步升级", crate::backends::frida::AGENT_PROTO_VERSION));
                                     }
                                     None => {
-                                        tracing::warn!("[session] agent 未上报 proto 版本（旧版 core.js？）");
+                                        tracing::warn!(
+                                            "[session] agent 未上报 proto 版本（旧版 core.js？）"
+                                        );
                                         let mut s = state.session.lock().await;
                                         push_ev(&mut s, "⚠ agent 未上报协议版本（旧版 core.js？），新事件类型可能无法落证据".to_string());
                                     }
@@ -641,21 +794,43 @@ async fn wait_hello(
                                     let mut s = state.session.lock().await;
                                     s.phase = SessionPhase::Running;
                                     s.hello = payload.clone();
-                                    push_ev(&mut s, format!(
-                                        "hello 握手成功：frida {} / pid {} / java {:?}",
-                                        payload.as_ref().and_then(|p| p.get("frida")).and_then(|v| v.as_str()).unwrap_or("?"),
-                                        payload.as_ref().and_then(|p| p.get("pid")).and_then(|v| v.as_u64()).unwrap_or(0),
-                                        payload.as_ref().and_then(|p| p.get("java")).and_then(|v| v.as_str()),
-                                    ));
+                                    push_ev(
+                                        &mut s,
+                                        format!(
+                                            "hello 握手成功：frida {} / pid {} / java {:?}",
+                                            payload
+                                                .as_ref()
+                                                .and_then(|p| p.get("frida"))
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("?"),
+                                            payload
+                                                .as_ref()
+                                                .and_then(|p| p.get("pid"))
+                                                .and_then(|v| v.as_u64())
+                                                .unwrap_or(0),
+                                            payload
+                                                .as_ref()
+                                                .and_then(|p| p.get("java"))
+                                                .and_then(|v| v.as_str()),
+                                        ),
+                                    );
                                     push_ev(&mut s, channel_evidence.to_string());
-                                    s.updated_at = chrono::Local::now().format("%H:%M:%S%.3f").to_string();
-                                    let db_case = case_name.clone().unwrap_or_else(|| "默认案件".into());
+                                    s.updated_at =
+                                        chrono::Local::now().format("%H:%M:%S%.3f").to_string();
+                                    let db_case =
+                                        case_name.clone().unwrap_or_else(|| "默认案件".into());
                                     (db_case, s.device.clone(), target_display(target))
                                 };
                                 // 落库（P2-3）：case→device→target→session；失败不阻断分析（锁外执行）
                                 let ch = channel_db.to_string();
                                 let db_result = tauri::async_runtime::spawn_blocking(move || {
-                                    crate::store::session_start(&db_case, serial_db.as_deref(), &tgt_display, &ch, "attach 成功（hello 握手通过）")
+                                    crate::store::session_start(
+                                        &db_case,
+                                        serial_db.as_deref(),
+                                        &tgt_display,
+                                        &ch,
+                                        "attach 成功（hello 握手通过）",
+                                    )
                                 })
                                 .await;
                                 {
@@ -668,15 +843,20 @@ async fn wait_hello(
                                         }
                                         Err(e) => {
                                             push_ev(&mut s, format!("会话落库跳过：{e}"));
-                                            tracing::warn!("[session] 会话落库任务失败（不阻断）：{e}");
+                                            tracing::warn!(
+                                                "[session] 会话落库任务失败（不阻断）：{e}"
+                                            );
                                         }
                                     }
                                     push_ev(&mut s, "trace run 已开启".to_string());
-                                    s.updated_at = chrono::Local::now().format("%H:%M:%S%.3f").to_string();
+                                    s.updated_at =
+                                        chrono::Local::now().format("%H:%M:%S%.3f").to_string();
                                     let snap = s.clone();
                                     let _ = app.emit("session-state", snap.clone());
                                     drop(s);
-                                    let trace: State<std::sync::Arc<crate::services::trace::TraceState>> = app.state();
+                                    let trace: State<
+                                        std::sync::Arc<crate::services::trace::TraceState>,
+                                    > = app.state();
                                     trace.start(snap.db_session_id).await;
                                     crate::audit::audit(
                                         "session_attach",
@@ -703,7 +883,11 @@ fn target_display(target: &Value) -> String {
     target.as_str().unwrap_or("unknown").to_string()
 }
 
-async fn fail(app: &tauri::AppHandle, state: &FridaState, msg: &str) -> Result<SessionSnapshot, String> {
+async fn fail(
+    app: &tauri::AppHandle,
+    state: &FridaState,
+    msg: &str,
+) -> Result<SessionSnapshot, String> {
     let mut s = state.session.lock().await;
     s.phase = SessionPhase::Failed;
     push_ev(&mut s, format!("✖ {msg}"));
@@ -736,7 +920,12 @@ pub async fn detach(app: &tauri::AppHandle, state: &FridaState) -> Result<Sessio
     // 落库收尾都是慢操作，此前全程持锁，sidecar 挂死时 detach 最长阻塞持锁 ~60s+
     let (channel_tag, script_id, session_id, db_session_id) = {
         let s = state.session.lock().await;
-        (s.channel.clone(), s.script_id, s.session_id, s.db_session_id)
+        (
+            s.channel.clone(),
+            s.script_id,
+            s.session_id,
+            s.db_session_id,
+        )
     };
     // 分离是尽力而为的清理：单步失败不阻断后续步骤，但必须留痕而不是吞掉
     let mut errors: Vec<String> = Vec::new();
@@ -745,12 +934,20 @@ pub async fn detach(app: &tauri::AppHandle, state: &FridaState) -> Result<Sessio
         state.channel_c.detach().await;
     } else {
         if let Some(script_id) = script_id {
-            if let Err(e) = state.channel.call("unload_script", json!({"script_id": script_id})).await {
+            if let Err(e) = state
+                .channel
+                .call("unload_script", json!({"script_id": script_id}))
+                .await
+            {
                 errors.push(format!("卸载脚本 script#{script_id} 失败：{e}"));
             }
         }
         if let Some(session_id) = session_id {
-            if let Err(e) = state.channel.call("detach", json!({"session_id": session_id})).await {
+            if let Err(e) = state
+                .channel
+                .call("detach", json!({"session_id": session_id}))
+                .await
+            {
                 errors.push(format!("detach session#{session_id} 失败：{e}"));
             }
         }
@@ -759,14 +956,22 @@ pub async fn detach(app: &tauri::AppHandle, state: &FridaState) -> Result<Sessio
     let trace_rid = trace.stop().await;
     // 落库收尾（P2-3，锁外执行）
     if let Some(db_id) = db_session_id {
-        if let Err(e) =
-            tauri::async_runtime::spawn_blocking(move || crate::store::session_finish(db_id, "stopped", "用户主动分离")).await
+        if let Err(e) = tauri::async_runtime::spawn_blocking(move || {
+            crate::store::session_finish(db_id, "stopped", "用户主动分离")
+        })
+        .await
         {
             tracing::warn!("[session] 会话落库收尾失败（不阻断）：{e}");
         }
     }
     if !errors.is_empty() {
-        crate::audit::audit("session_detach", "app", "warn", "session-console", &errors.join("；"));
+        crate::audit::audit(
+            "session_detach",
+            "app",
+            "warn",
+            "session-console",
+            &errors.join("；"),
+        );
     }
     // 阶段2：重新持锁落终态并 emit
     let snap = {
@@ -789,7 +994,13 @@ pub async fn detach(app: &tauri::AppHandle, state: &FridaState) -> Result<Sessio
         let _ = app.emit("session-state", snap.clone());
         snap
     };
-    crate::audit::audit("session_detach", "app", "done", "session-console", "用户主动分离");
+    crate::audit::audit(
+        "session_detach",
+        "app",
+        "done",
+        "session-console",
+        "用户主动分离",
+    );
     Ok(snap)
 }
 
@@ -802,7 +1013,10 @@ pub async fn ping(state: &FridaState) -> Result<Value, String> {
     drop(s);
     state
         .channel
-        .call("post", json!({"script_id": script_id, "message": {"type": "ping", "data": {"ts": "now"}}}))
+        .call(
+            "post",
+            json!({"script_id": script_id, "message": {"type": "ping", "data": {"ts": "now"}}}),
+        )
         .await?;
     // pong 走事件流，前端直接展示；这里确认 post 已受理
     Ok(json!({"posted": true}))
@@ -824,7 +1038,16 @@ pub async fn forward_events(
                 match rx.recv().await {
                     Ok(ev) => {
                         let mut agent_error_payload: Option<Value> = None;
-                        if let FridaEvent::Message { script_id, kind, payload, data_b64, description, stack, .. } = &ev {
+                        if let FridaEvent::Message {
+                            script_id,
+                            kind,
+                            payload,
+                            data_b64,
+                            description,
+                            stack,
+                            ..
+                        } = &ev
+                        {
                             // agent 脚本级异常（kind=error 时 payload=None，description/stack
                             // 承载详情）此前不落证据文件——崩溃只活在 UI 实时流里（批次⑪②）：
                             // 合成 agent_error 记录进 trace 管线，证据链补上这一段
@@ -839,16 +1062,25 @@ pub async fn forward_events(
                             let payload_ref = agent_error_payload
                                 .as_ref()
                                 .unwrap_or(payload.as_ref().unwrap_or(&Value::Null));
-                            crate::services::trace::on_agent_message(&handle, &trace, payload_ref, *script_id, data_b64);
+                            crate::services::trace::on_agent_message(
+                                &handle,
+                                &trace,
+                                payload_ref,
+                                *script_id,
+                                data_b64,
+                            );
                         }
                         // 大包不进 webview：data_b64 只属于 trace 管线（dex 落盘后有
                         // dex-dumped 事件），MB 级 base64 走 IPC 会把 webview 打卡
                         const MAX_EVENT_B64: usize = 1 << 20;
                         let out = match &ev {
-                            FridaEvent::Message { data_b64: Some(d), .. } if d.len() > MAX_EVENT_B64 => {
+                            FridaEvent::Message {
+                                data_b64: Some(d), ..
+                            } if d.len() > MAX_EVENT_B64 => {
                                 let mut redacted = ev.clone();
                                 if let FridaEvent::Message { data_b64, .. } = &mut redacted {
-                                    *data_b64 = Some(format!("<{d} bytes 已由 trace 管线处理，此处省略>"));
+                                    *data_b64 =
+                                        Some(format!("<{d} bytes 已由 trace 管线处理，此处省略>"));
                                 }
                                 redacted
                             }
@@ -857,15 +1089,26 @@ pub async fn forward_events(
                         // 直接序列化事件本身（此前 to_value + emit 序列化了两次）
                         let _ = handle.emit("frida-event", &out);
                         if let FridaEvent::Detached { reason, .. } = &ev {
-                            crate::audit::audit("frida_detached", "session", "warn", "sidecar", reason);
+                            crate::audit::audit(
+                                "frida_detached",
+                                "session",
+                                "warn",
+                                "sidecar",
+                                reason,
+                            );
                         }
                         // 请求生命周期留痕（批次⑩）：宿主已放弃的调用最终完成/失败必须可审计——
                         // 这是「UI 与真实探针状态分叉」类事故的唯一直接证据
                         if let FridaEvent::OpAbandoned { method, .. } = &ev {
                             tracing::warn!("[通道B] 请求弃管（25s 结构化超时）：{method}");
                         }
-                        if let FridaEvent::OpLate { req_id, method, ok, .. } = &ev {
-                            tracing::warn!("[通道B] 弃管请求迟到完成：req={req_id} method={method} ok={ok}");
+                        if let FridaEvent::OpLate {
+                            req_id, method, ok, ..
+                        } = &ev
+                        {
+                            tracing::warn!(
+                                "[通道B] 弃管请求迟到完成：req={req_id} method={method} ok={ok}"
+                            );
                             crate::audit::audit(
                                 "op_late",
                                 method,
@@ -908,7 +1151,10 @@ fn proc_is_system(pid: u32, name: &str) -> bool {
         || name.starts_with("system")
 }
 
-pub async fn enumerate_processes(cfg: &AppConfig, frida: &FridaChannelB) -> Result<Vec<ProcEntry>, String> {
+pub async fn enumerate_processes(
+    cfg: &AppConfig,
+    frida: &FridaChannelB,
+) -> Result<Vec<ProcEntry>, String> {
     // 先确保 forward 存在并取主机侧端口（S-06：主机端口可能与设备端口不同）
     let adb = AdbBackend::detect(&cfg.adb_path, &cfg.doctor.adb_extra_paths).await?;
     let devices = adb.devices().await?;
@@ -919,9 +1165,16 @@ pub async fn enumerate_processes(cfg: &AppConfig, frida: &FridaChannelB) -> Resu
         .ok_or("无 device 状态设备：先连接模拟器")?;
     let host_port = forward_setup(cfg, &adb, &serial).await?.host_port;
     let conn = frida
-        .call("remote_connect", json!({"host": "127.0.0.1", "port": host_port}))
+        .call(
+            "remote_connect",
+            json!({"host": "127.0.0.1", "port": host_port}),
+        )
         .await?;
-    let device = conn.get("key").and_then(|k| k.as_str()).ok_or("未返回 device key")?.to_string();
+    let device = conn
+        .get("key")
+        .and_then(|k| k.as_str())
+        .ok_or("未返回 device key")?
+        .to_string();
     let procs = frida
         .call("enumerate_processes", json!({"device": device}))
         .await?;
@@ -934,18 +1187,30 @@ pub async fn enumerate_processes(cfg: &AppConfig, frida: &FridaChannelB) -> Resu
     let running_identifiers: Vec<String> = apps
         .iter()
         .filter(|a| a.get("pid").and_then(|p| p.as_u64()).unwrap_or(0) > 0)
-        .filter_map(|a| a.get("identifier").and_then(|i| i.as_str()).map(String::from))
+        .filter_map(|a| {
+            a.get("identifier")
+                .and_then(|i| i.as_str())
+                .map(String::from)
+        })
         .collect();
 
     let mut out: Vec<ProcEntry> = Vec::new();
     if let Some(list) = procs.as_array() {
         for p in list {
             let pid = p.get("pid").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-            let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let name = p
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             let system = proc_is_system(pid, &name);
             out.push(ProcEntry {
                 pid,
-                group: if system { "system".into() } else { "user".into() },
+                group: if system {
+                    "system".into()
+                } else {
+                    "user".into()
+                },
                 name: name.clone(),
                 running: running_identifiers.iter().any(|i| i == &name),
             });
@@ -963,7 +1228,11 @@ pub fn proc_entries_from_pairs(pairs: Vec<(u32, String)>) -> Vec<ProcEntry> {
             let system = proc_is_system(pid, &name);
             ProcEntry {
                 pid,
-                group: if system { "system".into() } else { "user".into() },
+                group: if system {
+                    "system".into()
+                } else {
+                    "user".into()
+                },
                 name,
                 running: false,
             }
