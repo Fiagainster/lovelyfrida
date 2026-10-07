@@ -33,7 +33,6 @@ chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
-fs2 = "0.4"
 portable-pty = "0.8"
 base64 = "0.22"
 md-5 = "0.10"
@@ -42,7 +41,7 @@ hex = "0.4"
 # C1 按需下载：manifest 驱动的 frida-server 供给（sha256 对账 + xz 解压）
 ureq = { version = "2", default-features = false, features = ["tls"] }
 lzma-rs = "0.3"
-# TODO 批次⑮待办：fs2 上游停更，换 fs4（同 API：available_space）；本轮 crates.io 网络不通暂缓
+fs4 = "1.1.0"  # fs2 上游停更的替代（同 available_space API，批次⑮）
 
 [profile.release]
 lto = true

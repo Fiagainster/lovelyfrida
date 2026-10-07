@@ -879,7 +879,7 @@ fn check_storage(cfg: &AppConfig) -> CheckResult {
 
     // 磁盘余量
     let root = crate::paths::app_root();
-    let free_gb = fs2::available_space(root)
+    let free_gb = fs4::available_space(root)
         .map(|b| b as f64 / 1024.0 / 1024.0 / 1024.0)
         .ok();
     match free_gb {
