@@ -24,32 +24,12 @@ pub struct EvidenceItem {
     pub note: String,
 }
 
+// 连接构造收敛到 store::open_db（批次⑪①）：此前自建连接缺 busy_timeout，
+// 与 attach 落库并发写时瞬时 SQLITE_BUSY 直接报给用户
 fn db() -> Result<Connection, String> {
-    let conn = Connection::open(crate::paths::cases_db_path())
-        .map_err(|e| format!("打开 cases.db 失败：{e}"))?;
-    conn.pragma_update(None, "foreign_keys", "ON").map_err(|e| e.to_string())?;
-    Ok(conn)
+    crate::store::open_db()
 }
 
-fn ensure_case(conn: &Connection, case_name: &str) -> Result<i64, String> {
-    let mut stmt = conn
-        .prepare("SELECT id FROM cases WHERE name = ?1")
-        .map_err(|e| e.to_string())?;
-    let existing: Option<i64> = stmt
-        .query_row([case_name], |r| r.get(0))
-        .map(Some)
-        .or_else(|e| if e == rusqlite::Error::QueryReturnedNoRows { Ok(None) } else { Err(e) })
-        .map_err(|e| e.to_string())?;
-    if let Some(id) = existing {
-        return Ok(id);
-    }
-    conn.execute(
-        "INSERT INTO cases(name, created_at) VALUES (?1, ?2)",
-        rusqlite::params![case_name, chrono::Local::now().to_rfc3339()],
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(conn.last_insert_rowid())
-}
 
 /// 新增发现。★ high 置信度必须双证据（math + device）——把原则5变成代码约束。
 pub fn add_finding(
@@ -77,7 +57,7 @@ pub fn add_finding(
         return Err(format!("未知置信度：{confidence}"));
     }
     let conn = db()?;
-    let case_id = ensure_case(&conn, case_name)?;
+    let case_id = crate::store::ensure_case_row(&conn, case_name)?;
     let ev_json = serde_json::to_string(evidence).map_err(|e| e.to_string())?;
     conn.execute(
         "INSERT INTO findings(case_id, question_id, question, answer, confidence, evidence, source, screenshot_slot)
@@ -92,7 +72,7 @@ pub fn add_finding(
 
 pub fn list_findings(case_name: &str) -> Result<Vec<Finding>, String> {
     let conn = db()?;
-    let case_id = ensure_case(&conn, case_name)?;
+    let case_id = crate::store::ensure_case_row(&conn, case_name)?;
     let mut stmt = conn
         .prepare("SELECT id, question_id, question, answer, confidence, evidence, source, screenshot_slot FROM findings WHERE case_id = ?1 ORDER BY id")
         .map_err(|e| e.to_string())?;

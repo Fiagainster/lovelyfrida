@@ -4,10 +4,10 @@
 use rusqlite::Connection;
 use serde::Serialize;
 
+// 连接构造收敛到 store::open_db（批次⑪①）：此前自建连接缺 busy_timeout/foreign_keys，
+// 与写路径并发时瞬时 SQLITE_BUSY 直接报给用户
 fn open() -> Result<Connection, String> {
-    let conn = Connection::open(crate::paths::cases_db_path())
-        .map_err(|e| format!("打开 cases.db 失败：{e}"))?;
-    Ok(conn)
+    crate::store::open_db()
 }
 
 // ---------------- 会话历史 ----------------

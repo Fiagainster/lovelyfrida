@@ -250,8 +250,9 @@ pub fn init() -> Result<(), String> {
 
 // ---------------- 落库辅助（P2-3，文档10：15 张表从 3 张有写入到核心链路全落库） ----------------
 // 全部自带 Connection（调用方在 spawn_blocking 里跑）；失败由调用方决定降级（不阻断主流程）。
-
-fn open_db() -> Result<Connection, String> {
+// 唯一连接构造入口（批次⑪①）：history/ledger/extras_svc 一律走这里——此前三处自建连接
+// 缺 busy_timeout（rusqlite 默认 0ms），与 attach 落库并发时瞬时 SQLITE_BUSY 直接报给用户。
+pub(crate) fn open_db() -> Result<Connection, String> {
     let conn = Connection::open(crate::paths::cases_db_path())
         .map_err(|e| format!("打开 cases.db 失败：{e}"))?;
     conn.pragma_update(None, "foreign_keys", "ON")
@@ -263,7 +264,20 @@ fn open_db() -> Result<Connection, String> {
     Ok(conn)
 }
 
-pub fn ensure_case_row(conn: &Connection, case_name: &str) -> Result<i64, String> {
+/// 落库收尾统一入口（批次⑪①）：失败一律 tracing::warn 留痕，不阻断主流程。
+/// 此前全链 `let _ =` 静默吞错——「落库失败不阻断」的设计本意是别拖垮分析会话，
+/// 但取证数据的丢失必须可在日志里对账，否则与「可审计」承诺直接矛盾。
+pub(crate) fn logged<T>(op: &str, f: impl FnOnce() -> Result<T, String>) -> Option<T> {
+    match f() {
+        Ok(v) => Some(v),
+        Err(e) => {
+            tracing::warn!("[落库] {op} 失败（数据未入库，主流程继续）：{e}");
+            None
+        }
+    }
+}
+
+pub(crate) fn ensure_case_row(conn: &Connection, case_name: &str) -> Result<i64, String> {
     let mut stmt = conn
         .prepare("SELECT id FROM cases WHERE name = ?1")
         .map_err(|e| e.to_string())?;
@@ -350,55 +364,71 @@ pub fn session_start(
 }
 
 pub fn session_finish(session_id: i64, state: &str, detail: &str) {
-    let Ok(conn) = open_db() else { return };
-    let _ = conn.execute(
-        "UPDATE sessions SET state = ?2, ended_at = ?3, detail = detail || ?4 WHERE id = ?1",
-        rusqlite::params![session_id, state, chrono::Local::now().to_rfc3339(), format!("｜{detail}")],
-    );
+    logged("session_finish", || {
+        let conn = open_db()?;
+        conn.execute(
+            "UPDATE sessions SET state = ?2, ended_at = ?3, detail = detail || ?4 WHERE id = ?1",
+            rusqlite::params![session_id, state, chrono::Local::now().to_rfc3339(), format!("｜{detail}")],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    });
 }
 
 /// trace run 开启；session 未落库（db_session_id=None）时跳过，trace 文件照常写。
 pub fn run_start(session_id: Option<i64>, trace_path: &str, started_at: &str) -> Option<i64> {
     let session_id = session_id?;
-    let conn = open_db().ok()?;
-    conn.execute(
-        "INSERT INTO runs(session_id, started_at, status, trace_path) VALUES (?1, ?2, 'running', ?3)",
-        rusqlite::params![session_id, started_at, trace_path],
-    )
-    .ok()?;
-    Some(conn.last_insert_rowid())
+    logged("run_start", || {
+        let conn = open_db()?;
+        conn.execute(
+            "INSERT INTO runs(session_id, started_at, status, trace_path) VALUES (?1, ?2, 'running', ?3)",
+            rusqlite::params![session_id, started_at, trace_path],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(conn.last_insert_rowid())
+    })
 }
 
 pub fn run_finish(run_id: Option<i64>, line_count: u64, status: &str, ended_at: &str) {
     let Some(run_id) = run_id else { return };
-    let Ok(conn) = open_db() else { return };
-    let _ = conn.execute(
-        "UPDATE runs SET status = ?2, ended_at = ?3, line_count = ?4 WHERE id = ?1",
-        rusqlite::params![run_id, status, ended_at, line_count as i64],
-    );
+    logged("run_finish", || {
+        let conn = open_db()?;
+        conn.execute(
+            "UPDATE runs SET status = ?2, ended_at = ?3, line_count = ?4 WHERE id = ?1",
+            rusqlite::params![run_id, status, ended_at, line_count as i64],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    });
 }
 
 /// 受控实验记录入库（v2：experiments.report_json）。
 pub fn experiment_record(case_name: &str, title: &str, report_json: &str, cases_json: &str) {
-    let Ok(conn) = open_db() else { return };
-    let Ok(case_id) = ensure_case_row(&conn, case_name) else { return };
-    let Ok(_) = conn.execute(
-        "INSERT INTO experiments(case_id, title, status, created_at, report_json) VALUES (?1, ?2, 'done', ?3, ?4)",
-        rusqlite::params![case_id, title, chrono::Local::now().to_rfc3339(), report_json],
-    ) else { return };
-    let experiment_id = conn.last_insert_rowid();
-    if let Ok(arr) = serde_json::from_str::<serde_json::Value>(cases_json) {
-        if let Some(list) = arr.as_array() {
-            for c in list {
-                let name = c.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                let content = c.get("content").and_then(|v| v.as_str()).unwrap_or("");
-                let _ = conn.execute(
-                    "INSERT INTO experiment_cases(experiment_id, name, input_kind, input_value, origin) VALUES (?1, ?2, 'template', ?3, 'manual')",
-                    rusqlite::params![experiment_id, name, content],
-                );
+    logged("experiment_record", || {
+        let conn = open_db()?;
+        let case_id = ensure_case_row(&conn, case_name)?;
+        conn.execute(
+            "INSERT INTO experiments(case_id, title, status, created_at, report_json) VALUES (?1, ?2, 'done', ?3, ?4)",
+            rusqlite::params![case_id, title, chrono::Local::now().to_rfc3339(), report_json],
+        )
+        .map_err(|e| e.to_string())?;
+        let experiment_id = conn.last_insert_rowid();
+        if let Ok(arr) = serde_json::from_str::<serde_json::Value>(cases_json) {
+            if let Some(list) = arr.as_array() {
+                for c in list {
+                    let name = c.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                    let content = c.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                    if let Err(e) = conn.execute(
+                        "INSERT INTO experiment_cases(experiment_id, name, input_kind, input_value, origin) VALUES (?1, ?2, 'template', ?3, 'manual')",
+                        rusqlite::params![experiment_id, name, content],
+                    ) {
+                        tracing::warn!("[落库] experiment_cases 行写入失败（experiment_id={experiment_id}）：{e}");
+                    }
+                }
             }
         }
-    }
+        Ok(())
+    });
 }
 
 pub fn crypto_scheme_record(
@@ -412,16 +442,20 @@ pub fn crypto_scheme_record(
     self_test_passed: bool,
     evidence_refs: &str,
 ) {
-    let Ok(conn) = open_db() else { return };
-    let Ok(case_id) = ensure_case_row(&conn, case_name) else { return };
-    let _ = conn.execute(
-        "INSERT INTO crypto_schemes(case_id, family, concat_order, salt_form, per_round_input, iteration, output_encoding, self_test_passed, evidence_refs)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-        rusqlite::params![
-            case_id, family, concat, salt_form, chain_input, iterations, output_encoding,
-            self_test_passed as i64, evidence_refs
-        ],
-    );
+    logged("crypto_scheme_record", || {
+        let conn = open_db()?;
+        let case_id = ensure_case_row(&conn, case_name)?;
+        conn.execute(
+            "INSERT INTO crypto_schemes(case_id, family, concat_order, salt_form, per_round_input, iteration, output_encoding, self_test_passed, evidence_refs)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            rusqlite::params![
+                case_id, family, concat, salt_form, chain_input, iterations, output_encoding,
+                self_test_passed as i64, evidence_refs
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    });
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -437,25 +471,33 @@ pub fn brute_job_record(
     reversed_verified: bool,
     perf_note: &str,
 ) {
-    let Ok(conn) = open_db() else { return };
-    let Ok(case_id) = ensure_case_row(&conn, case_name) else { return };
-    let _ = conn.execute(
-        "INSERT INTO brute_jobs(case_id, space, candidates_total, est_speed, engine, self_test_passed, status, hit_value, reversed_verified, perf_note)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-        rusqlite::params![
-            case_id, space_json, candidates_total as i64, est_speed, engine,
-            self_test_passed as i64, status, hit_value, reversed_verified as i64, perf_note
-        ],
-    );
+    logged("brute_job_record", || {
+        let conn = open_db()?;
+        let case_id = ensure_case_row(&conn, case_name)?;
+        conn.execute(
+            "INSERT INTO brute_jobs(case_id, space, candidates_total, est_speed, engine, self_test_passed, status, hit_value, reversed_verified, perf_note)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            rusqlite::params![
+                case_id, space_json, candidates_total as i64, est_speed, engine,
+                self_test_passed as i64, status, hit_value, reversed_verified as i64, perf_note
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    });
 }
 
 pub fn artifact_record(case_name: &str, kind: &str, path: &str, sha256: &str, created_by: &str) {
-    let Ok(conn) = open_db() else { return };
-    let Ok(case_id) = ensure_case_row(&conn, case_name) else { return };
-    let _ = conn.execute(
-        "INSERT INTO artifacts(case_id, kind, path, sha256, created_by, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        rusqlite::params![case_id, kind, path, sha256, created_by, chrono::Local::now().to_rfc3339()],
-    );
+    logged("artifact_record", || {
+        let conn = open_db()?;
+        let case_id = ensure_case_row(&conn, case_name)?;
+        conn.execute(
+            "INSERT INTO artifacts(case_id, kind, path, sha256, created_by, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![case_id, kind, path, sha256, created_by, chrono::Local::now().to_rfc3339()],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    });
 }
 
 #[cfg(test)]
