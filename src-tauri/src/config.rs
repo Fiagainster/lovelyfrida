@@ -151,7 +151,118 @@ fn validate(cfg: &AppConfig) -> Result<(), String> {
     if cfg.adb_connect_timeout_s == 0 || cfg.adb_connect_timeout_s > 60 {
         return Err("adb_connect_timeout_s 必须在 1~60 之间（E-02 硬约束默认 15）".into());
     }
+    // 批次⑮安全收尾：workspace/cases 是唯一可写区（文档06），配置成落在只读根之内
+    // = 自相矛盾——guard 会拒绝全部落库/导出/脚本写，用户只会在运行期遇到莫名其妙的拒绝
+    if let Some(msg) = writable_inside_readonly(cfg) {
+        return Err(msg);
+    }
     Ok(())
+}
+
+/// 词法路径包含判定（组件级、大小写不敏感、分隔符无关）：纯字符串比较不触盘——
+/// 配置值指向的目录可能尚不存在（首次运行），不能走 canonicalize。
+fn is_same_or_under(path: &std::path::Path, root: &std::path::Path) -> bool {
+    let norm = |p: &std::path::Path| -> Vec<String> {
+        p.components()
+            .map(|c| c.as_os_str().to_string_lossy().to_ascii_lowercase())
+            .filter(|s| !s.is_empty())
+            .collect()
+    };
+    let (pv, rv) = (norm(path), norm(root));
+    if rv.is_empty() {
+        return false;
+    }
+    pv.len() >= rv.len() && pv[..rv.len()] == rv[..]
+}
+
+fn writable_inside_readonly(cfg: &AppConfig) -> Option<String> {
+    for (name, p) in [
+        ("workspace_root", &cfg.workspace_root),
+        ("cases_root", &cfg.cases_root),
+    ] {
+        let t = p.trim();
+        if t.is_empty() {
+            continue;
+        }
+        for r in &cfg.read_only_roots {
+            let rt = r.trim();
+            if rt.is_empty() {
+                continue;
+            }
+            if is_same_or_under(std::path::Path::new(t), std::path::Path::new(rt)) {
+                return Some(format!(
+                    "{name}（{t}）不能配置在只读根「{rt}」之内——工作区/归档是唯一可写区（文档06），与只读第一原则自相矛盾"
+                ));
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg(workspace: &str, cases: &str, readonly: &[&str]) -> AppConfig {
+        AppConfig {
+            workspace_root: workspace.into(),
+            cases_root: cases.into(),
+            read_only_roots: readonly.iter().map(|s| s.to_string()).collect(),
+            ..AppConfig::default()
+        }
+    }
+
+    #[test]
+    fn validate_常规合法配置通过() {
+        assert!(validate(&cfg("D:\\ws", "D:\\cases", &["D:\\Evidence"])).is_ok());
+        assert!(validate(&cfg("", "", &[])).is_ok(), "空根（默认布局）合法");
+    }
+
+    #[test]
+    fn validate_系统盘拒绝() {
+        let c = cfg("C:\\ws", "", &[]);
+        assert!(validate(&c).is_err(), "workspace 在 C: 必须拒绝");
+    }
+
+    #[test]
+    fn validate_超时约束() {
+        assert!(validate(&cfg("", "", &[]).with_timeout(0)).is_err());
+        assert!(validate(&cfg("", "", &[]).with_timeout(61)).is_err());
+        assert!(validate(&cfg("", "", &[]).with_timeout(15)).is_ok());
+    }
+
+    #[test]
+    fn validate_可写根落在只读根内必须拒绝() {
+        let c = cfg("D:\\Evidence\\ws", "D:\\cases", &["D:\\Evidence"]);
+        let err = validate(&c).unwrap_err();
+        assert!(err.contains("workspace_root"), "应点出冲突字段：{err}");
+        let c = cfg("D:\\ws", "D:\\Evidence\\cases\\x", &["D:\\Evidence"]);
+        assert!(validate(&c).is_err(), "cases_root 深层嵌套同样拒绝");
+    }
+
+    #[test]
+    fn validate_只读根冲突大小写与斜杠方向不敏感() {
+        let c = cfg("d:/evidence/ws", "", &["D:\\Evidence"]);
+        assert!(validate(&c).is_err(), "正斜杠与大小写差异不得绕过校验");
+        let c = cfg("D:\\Evidence\\", "", &["d:/evidence"]);
+        assert!(validate(&c).is_err(), "尾随分隔符与根自身重合同样拒绝");
+    }
+
+    #[test]
+    fn validate_同级目录不误报() {
+        let c = cfg("D:\\Evidence2\\ws", "", &["D:\\Evidence"]);
+        assert!(
+            validate(&c).is_ok(),
+            "Evidence2 不是 Evidence 的子路径（组件级比较）"
+        );
+    }
+
+    impl AppConfig {
+        fn with_timeout(mut self, s: u64) -> Self {
+            self.adb_connect_timeout_s = s;
+            self
+        }
+    }
 }
 
 fn persist(cfg: &AppConfig) -> Result<(), String> {
