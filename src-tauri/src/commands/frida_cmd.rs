@@ -187,7 +187,7 @@ pub async fn frida_rpc(
         .await;
     match &r {
         Ok(_) => crate::audit::audit("frida_rpc", &f, "done", "agent-rpc", &args_short),
-        Err(e) => crate::audit::audit("frida_rpc", &f, "fail", "agent-rpc", &e),
+        Err(e) => crate::audit::audit("frida_rpc", &f, "fail", "agent-rpc", e),
     }
     let v = r?;
     v.get("result")
@@ -406,6 +406,7 @@ pub async fn brute_generate_c(
 // ---------- M5：Evidence 台账 / 案卷包 ----------
 // SQLite 同步驱动（rusqlite）：统一 spawn_blocking，避免阻塞 tokio worker（P1-5）
 
+#[allow(clippy::too_many_arguments)] // 落库/编排函数的参数即字段清单（先例：brute_job_record）
 #[tauri::command]
 pub async fn ledger_add(
     case_name: String,
@@ -501,6 +502,7 @@ pub async fn script_delete(name: String) -> Result<(), String> {
         .map_err(|e| format!("后台任务失败：{e}"))?
 }
 
+#[allow(clippy::too_many_arguments)] // 落库/编排函数的参数即字段清单（先例：brute_job_record）
 #[tauri::command]
 #[allow(non_snake_case)]
 pub async fn profile_save(

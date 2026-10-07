@@ -39,7 +39,7 @@ pub async fn run() -> Result<FirstRunReport, String> {
     // FR-03 磁盘空间
     let root = crate::paths::app_root();
     let (disk_ok, disk_detail) =
-        match fs2::available_space(&root).map(|b| b as f64 / 1024.0 / 1024.0 / 1024.0) {
+        match fs2::available_space(root).map(|b| b as f64 / 1024.0 / 1024.0 / 1024.0) {
             Ok(g) => (
                 g >= 1.0,
                 format!("{root:?} 所在盘剩余 {g:.1} GB（阈值 1 GB）"),

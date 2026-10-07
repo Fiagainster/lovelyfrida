@@ -1,6 +1,6 @@
-//! 爆破编排（文档04-G / U5）：掩码空间展开 + 预估三件套（总数/速率/ETA）
-//! + hashcat 命令生成（有 mode）+ C 专用爆破器骨架生成（无 mode，链式轮优化 +
-//! ★强制自测桩）+ 内置 Rust 爆破（小空间直接跑；自测不过不许全量）。
+//! 爆破编排（文档04-G / U5）：掩码空间展开 + 预估三件套（总数/速率/ETA）+ hashcat
+//! 命令生成（有 mode）+ C 专用爆破器骨架生成（无 mode，链式轮优化 + ★强制自测桩）+
+//! 内置 Rust 爆破（小空间直接跑；自测不过不许全量）。
 use crate::services::crypto::{parse_concat, recompute, scheme_salt_bytes, Concat, Sample, Scheme};
 use serde::Serialize;
 
@@ -296,7 +296,7 @@ pub fn generate_c_skeleton(scheme: &Scheme, sample: &Sample, mask: &str) -> Stri
             selftest_bytes.join(",")
         )
     };
-    let selftest_len = sample.plaintext.as_bytes().len();
+    let selftest_len = sample.plaintext.len();
 
     // 链式轮：hex 链输入是 2×摘要长的 hex 串；原始链输入直接用摘要（经 tmp 防止 in==out 别名）
     let chain_loop = if iter > 1 && chain_hex {
@@ -331,6 +331,10 @@ pub fn generate_c_skeleton(scheme: &Scheme, sample: &Sample, mask: &str) -> Stri
         String::new()
     };
 
+    let human = format!(
+        "{}（{}，{}，迭代 {}，输出 {}）",
+        scheme.family, scheme.concat, scheme.salt_form, iter, scheme.output_encoding
+    );
     format!(
         r#"/* LovelyFrida 生成的 C 专用爆破器（方案：{human}）
  * 编译：gcc -O3 -march=native -fopenmp -o brute brute.c -lcrypto
@@ -424,10 +428,6 @@ int main(void) {{
     return 0;
 }}
 "#,
-        human = format!(
-            "{}（{}，{}，迭代 {}，输出 {}）",
-            scheme.family, scheme.concat, scheme.salt_form, iter, scheme.output_encoding
-        ),
         family_note = family_note,
         hash_include = hash_include,
         iter = iter,

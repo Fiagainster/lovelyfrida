@@ -446,6 +446,7 @@ pub fn experiment_record(case_name: &str, title: &str, report_json: &str, cases_
     });
 }
 
+#[allow(clippy::too_many_arguments)] // 落库/编排函数的参数即字段清单（先例：brute_job_record）
 pub fn crypto_scheme_record(
     case_name: &str,
     family: &str,

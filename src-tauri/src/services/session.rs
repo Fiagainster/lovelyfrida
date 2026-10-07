@@ -720,6 +720,7 @@ pub async fn attach(
     .await
 }
 
+#[allow(clippy::too_many_arguments)] // 落库/编排函数的参数即字段清单（先例：brute_job_record）
 /// 等待 hello（注入成功判据，6s 超时）→ 成功即 Running + 落库 + 开 trace。
 /// B/C 两路共用：hello 循环与通道无关，事件形状一致（C 走 send-shim 回流）。
 async fn wait_hello(

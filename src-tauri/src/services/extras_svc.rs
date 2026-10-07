@@ -129,6 +129,7 @@ fn db() -> Result<Connection, String> {
     crate::store::open_db()
 }
 
+#[allow(clippy::too_many_arguments)] // 落库/编排函数的参数即字段清单（先例：brute_job_record）
 pub fn profile_save(
     case_name: &str,
     id: Option<i64>,

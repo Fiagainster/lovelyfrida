@@ -222,7 +222,7 @@ pub fn graceful_shutdown(app: &tauri::AppHandle) {
         {
             std::thread::sleep(Duration::from_millis(100));
         }
-        let _ = handle_exit.exit(0);
+        handle_exit.exit(0);
     });
 }
 

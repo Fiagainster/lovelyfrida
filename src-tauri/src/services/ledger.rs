@@ -30,6 +30,7 @@ fn db() -> Result<Connection, String> {
     crate::store::open_db()
 }
 
+#[allow(clippy::too_many_arguments)] // 落库/编排函数的参数即字段清单（先例：brute_job_record）
 /// 新增发现。★ high 置信度必须双证据（math + device）——把原则5变成代码约束。
 pub fn add_finding(
     case_name: &str,

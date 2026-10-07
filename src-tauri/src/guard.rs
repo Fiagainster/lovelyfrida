@@ -35,7 +35,7 @@ fn lexical_clean(p: &std::path::Path) -> std::path::PathBuf {
 /// 规范化路径：先词法清理，再取最深存在祖先做 canonicalize，
 /// 避免「不存在所以无法校验」与「构造相对路径」两类绕过。
 pub fn normalize(path: &str) -> std::path::PathBuf {
-    normalize_in(&crate::paths::app_root(), path)
+    normalize_in(crate::paths::app_root(), path)
 }
 
 /// normalize 的纯函数核（A2：可测，不依赖全局 app_root）
@@ -73,7 +73,7 @@ fn is_under(path: &std::path::Path, root: &std::path::Path) -> bool {
 /// 判定 1+3（检材只读根 / source 段只读语义）：适用于工作区之外的合法写路径
 /// （cases\ 台账导出、脚本库、jobs），这些路径不走工作区约束但同样不得触碰检材。
 pub fn ensure_not_evidence(path: &str) -> GuardVerdict {
-    ensure_not_evidence_in(&crate::config::get(), &crate::paths::app_root(), path)
+    ensure_not_evidence_in(&crate::config::get(), crate::paths::app_root(), path)
 }
 
 pub fn ensure_not_evidence_in(
@@ -138,7 +138,7 @@ pub fn ensure_not_evidence_in(
 }
 
 pub fn check_write(path: &str) -> GuardVerdict {
-    check_write_in(&crate::config::get(), &crate::paths::app_root(), path)
+    check_write_in(&crate::config::get(), crate::paths::app_root(), path)
 }
 
 pub fn check_write_in(

@@ -85,6 +85,7 @@ pub async fn run(cfg: &AppConfig, deep: bool) -> DoctorReport {
     }
 }
 
+#[allow(clippy::too_many_arguments)] // 落库/编排函数的参数即字段清单（先例：brute_job_record）
 fn result(
     id: &str,
     name: &str,
@@ -828,9 +829,8 @@ async fn check_port(
         } else {
             "pass"
         }
-    } else if evidence.iter().any(|e| e.starts_with("✖")) {
-        "warn"
     } else {
+        // 非 ✔ 分支（含 ✖ 与无证据）一律 warn：✖ 的细分处置由下方 fix 文案承载
         "warn"
     };
     let fix = if evidence.iter().any(|e| e.starts_with("✖")) {
@@ -879,7 +879,7 @@ fn check_storage(cfg: &AppConfig) -> CheckResult {
 
     // 磁盘余量
     let root = crate::paths::app_root();
-    let free_gb = fs2::available_space(&root)
+    let free_gb = fs2::available_space(root)
         .map(|b| b as f64 / 1024.0 / 1024.0 / 1024.0)
         .ok();
     match free_gb {
