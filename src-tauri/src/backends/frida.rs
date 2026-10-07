@@ -41,6 +41,17 @@ pub enum FridaEvent {
         identifier: Option<String>,
         pid: Option<u32>,
     },
+    /// 请求在 sidecar 侧 25s 结构化超时被弃管（宿主已收到 timeout 错误）；
+    /// 底层调用若最终完成会补发 OpLate 并由 sidecar 回滚创建型副作用（批次⑩）
+    OpAbandoned { req_id: u64, method: String },
+    /// 被弃管的请求最终完成（ok=false 表示以异常收场）；宿主只留痕，不恢复状态
+    OpLate {
+        req_id: u64,
+        method: String,
+        ok: bool,
+        result: Option<Value>,
+        error: Option<String>,
+    },
 }
 
 struct Pending {

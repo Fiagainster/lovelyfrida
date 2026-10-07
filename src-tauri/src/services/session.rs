@@ -824,6 +824,21 @@ pub async fn forward_events(
                         if let FridaEvent::Detached { reason, .. } = &ev {
                             crate::audit::audit("frida_detached", "session", "warn", "sidecar", reason);
                         }
+                        // 请求生命周期留痕（批次⑩）：宿主已放弃的调用最终完成/失败必须可审计——
+                        // 这是「UI 与真实探针状态分叉」类事故的唯一直接证据
+                        if let FridaEvent::OpAbandoned { method, .. } = &ev {
+                            tracing::warn!("[通道B] 请求弃管（25s 结构化超时）：{method}");
+                        }
+                        if let FridaEvent::OpLate { req_id, method, ok, .. } = &ev {
+                            tracing::warn!("[通道B] 弃管请求迟到完成：req={req_id} method={method} ok={ok}");
+                            crate::audit::audit(
+                                "op_late",
+                                method,
+                                if *ok { "warn" } else { "info" },
+                                "sidecar",
+                                &format!("req={req_id}"),
+                            );
+                        }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                         tracing::warn!("[frida] 事件积压丢弃 {n} 条");
