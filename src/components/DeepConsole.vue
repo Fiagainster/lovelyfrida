@@ -8,7 +8,7 @@ import {
   CubeOutline,
   SearchOutline,
 } from "@vicons/ionicons5";
-import { api, type ScriptInfo } from "@/api";
+import { api, errMsg, type ScriptInfo } from "@/api";
 import { useProbeStore } from "@/stores/probe";
 import { useSessionStore } from "@/stores/session";
 
@@ -21,11 +21,13 @@ const needSession = computed(() => session.session?.phase !== "running");
 
 // ---------- 深度观测（能力包 A/C：dlopen / RegisterNatives / dumpDex / SSL） ----------
 const deepBusy = ref<string | null>(null);
-const deepLog = ref<{ ts: string; text: string }[]>([]);
+const deepLog = ref<{ id: number; ts: string; text: string }[]>([]);
 const sslWatchId = ref<string | null>(null);
 
+let deepLogSeq = 0;
 function deepLogPush(text: string) {
-  deepLog.value.unshift({ ts: new Date().toLocaleTimeString("zh-CN", { hour12: false }), text });
+  // 稳定 id 作 key（批次⑫）：前插列表 index key 每次前插全列表重渲染
+  deepLog.value.unshift({ id: ++deepLogSeq, ts: new Date().toLocaleTimeString("zh-CN", { hour12: false }), text });
   if (deepLog.value.length > 60) deepLog.value.pop();
 }
 
@@ -77,12 +79,21 @@ const scriptRunning = ref(false);
 const scriptResult = ref<string | null>(null);
 
 async function refreshScripts() {
-  scripts.value = await api.scriptList();
+  try {
+    scripts.value = await api.scriptList();
+  } catch (e) {
+    // 脚本库不可用（只读根配置异常等）：toast 而非全局 fatal 条（批次⑫）
+    message.error(errMsg(e));
+  }
 }
 
 async function onOpenScript(name: string) {
-  scriptName.value = name;
-  scriptContent.value = await api.scriptRead(name);
+  try {
+    scriptName.value = name;
+    scriptContent.value = await api.scriptRead(name);
+  } catch (e) {
+    message.error(errMsg(e));
+  }
 }
 
 async function onSaveScript() {
@@ -90,18 +101,26 @@ async function onSaveScript() {
     message.warning("先填脚本名");
     return;
   }
-  await api.scriptSave(scriptName.value.trim(), scriptContent.value);
-  message.success("已保存（cases/scripts/）");
-  await refreshScripts();
+  try {
+    await api.scriptSave(scriptName.value.trim(), scriptContent.value);
+    message.success("已保存（cases/scripts/）");
+    await refreshScripts();
+  } catch (e) {
+    message.error(errMsg(e));
+  }
 }
 
 async function onDeleteScript() {
   if (!scriptName.value.trim()) return;
-  await api.scriptDelete(scriptName.value.trim());
-  scriptName.value = "";
-  scriptContent.value = "";
-  await refreshScripts();
-  message.success("已删除");
+  try {
+    await api.scriptDelete(scriptName.value.trim());
+    scriptName.value = "";
+    scriptContent.value = "";
+    await refreshScripts();
+    message.success("已删除");
+  } catch (e) {
+    message.error(errMsg(e));
+  }
 }
 
 async function onRunScript() {
@@ -185,7 +204,7 @@ onMounted(refreshScripts);
         </NButton>
       </div>
       <div v-if="deepLog.length" class="repl-feed mono" style="margin-top: 10px; max-height: 200px">
-        <div v-for="(l, i) in deepLog" :key="i" :class="l.text.includes('✖') ? 'repl-err' : 'repl-ok'" style="font-size: 11px">
+        <div v-for="l in deepLog" :key="l.id" :class="l.text.includes('✖') ? 'repl-err' : 'repl-ok'" style="font-size: 11px">
           {{ l.ts }} {{ l.text.slice(0, 220) }}
         </div>
       </div>

@@ -12,6 +12,19 @@ async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T
   return invoke<T>(cmd, args);
 }
 
+/** 错误归一化展示（批次⑫）：Rust 的 Err(String) 本身就是面向用户的文案，直接用；
+ *  JS Error 取 message；其余 JSON 化兜底。展示格式不再时而是 "Error: x" 时而是对象 dump。
+ *  全局红色 fatal 条（main.ts 兜底）只留给真崩溃——常规操作失败一律 message.error(errMsg(e))。 */
+export function errMsg(e: unknown): string {
+  if (typeof e === "string") return e;
+  if (e instanceof Error) return e.message;
+  try {
+    return JSON.stringify(e);
+  } catch {
+    return String(e);
+  }
+}
+
 // ---------- 类型（对应 Rust struct） ----------
 
 /** 六态状态（文档03：○/◐/●/◑/✖/⊘，Rust 侧为 String，此约束只在前端） */

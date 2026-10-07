@@ -5,7 +5,7 @@ import { SearchOutline, AddOutline, TrashOutline, ArrowForwardOutline } from "@v
 import { useProbeStore } from "@/stores/probe";
 import { useSessionStore } from "@/stores/session";
 import { useDiagStore } from "@/stores/diagnostics";
-import type { ProbeStat } from "@/api";
+import { errMsg, type ProbeStat } from "@/api";
 import StatusLight from "@/components/StatusLight.vue";
 import DeepConsole from "@/components/DeepConsole.vue";
 
@@ -128,6 +128,10 @@ async function pickClass(name: string) {
     } else {
       classMethods.value = r.methods;
     }
+  } catch (e) {
+    // 未附加会话等 RPC 失败是可预期错误：toast 而非全局 fatal 条（批次⑫）
+    message.error(errMsg(e));
+    classMethods.value = [];
   } finally {
     classMethodsLoading.value = false;
   }
@@ -144,11 +148,13 @@ function hookMethod(clazz: string, method: string) {
 const replInput = ref("");
 const replBusy = ref(false);
 interface ReplEntry {
+  id: number;
   code: string;
   ok: boolean;
   text: string;
 }
 const replHistory = ref<ReplEntry[]>([]);
+let replSeq = 0;
 
 async function onReplRun() {
   const code = replInput.value.trim();
@@ -156,10 +162,10 @@ async function onReplRun() {
   replBusy.value = true;
   try {
     const r = await probe.rpc<{ value: { k: string; v: string }; blob_b64: string | null }>("replEval", [{ code }]);
-    replHistory.value.unshift({ code, ok: r.value.k !== "err", text: `[${r.value.k}] ${r.value.v}` });
+    replHistory.value.unshift({ id: ++replSeq, code, ok: r.value.k !== "err", text: `[${r.value.k}] ${r.value.v}` });
     replInput.value = "";
   } catch (e) {
-    replHistory.value.unshift({ code, ok: false, text: String(e) });
+    replHistory.value.unshift({ id: ++replSeq, code, ok: false, text: String(e) });
   } finally {
     replBusy.value = false;
   }
@@ -402,7 +408,7 @@ function statusLight(s: ProbeStat["status"]) {
         <NButton size="small" type="primary" :loading="replBusy" @click="onReplRun">执行</NButton>
       </div>
       <div class="repl-feed mono">
-        <div v-for="(h, i) in replHistory" :key="i" class="repl-entry">
+        <div v-for="h in replHistory" :key="h.id" class="repl-entry">
           <div class="repl-code">&gt; {{ h.code }}</div>
           <div :class="h.ok ? 'repl-ok' : 'repl-err'">{{ h.text }}</div>
         </div>

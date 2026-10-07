@@ -10,6 +10,7 @@ import {
 } from "@vicons/ionicons5";
 import { useSessionStore } from "@/stores/session";
 import { usePipelineStore } from "@/stores/pipeline";
+import { errMsg } from "@/api";
 import StatusLight from "@/components/StatusLight.vue";
 
 /** 会话控制台（文档04-B）：frida 环境 + 进程分组列表 + 附加链路状态机 */
@@ -50,8 +51,14 @@ async function doAttach(p: { pid: number; name: string }) {
 }
 
 async function doDetach() {
-  await session.detachSession();
-  message.info("已分离");
+  try {
+    await session.detachSession();
+    message.info("已分离");
+  } catch (e) {
+    // 会话已死（对端已 detach/sidecar 重启）时点「分离」是常态操作：
+    // 失败提示而非全局红色 fatal 条（批次⑫错误呈现收敛）
+    message.warning(`分离未完成（会话可能已死）：${errMsg(e)}`);
+  }
 }
 
 onMounted(() => {
@@ -210,7 +217,7 @@ onMounted(() => {
     </div>
     <!-- 最近消息 -->
     <div v-if="session.messages.length" class="msg-feed mono">
-      <div v-for="(m, i) in session.messages.slice(0, 8)" :key="i" class="msg-row">
+      <div v-for="m in session.messages.slice(0, 8)" :key="m.id" class="msg-row">
         <span class="msg-ts">{{ m.ts }}</span>
         <span :class="['msg-kind', `msg-kind--${m.kind}`]">{{ m.kind }}</span>
         <span class="msg-text">{{ m.text.slice(0, 160) }}</span>

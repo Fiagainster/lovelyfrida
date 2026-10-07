@@ -15,7 +15,8 @@ export const useSessionStore = defineStore("session", () => {
 
   const session = ref<SessionSnapshot | null>(null);
   const attachLoading = ref(false);
-  const messages = ref<{ ts: string; kind: string; text: string }[]>([]);
+  const messages = ref<{ id: number; ts: string; kind: string; text: string }[]>([]);
+  let msgSeq = 0;
   // bindEvents 重入门（dev HMR 重跑 setup 会重复注册 Tauri 监听）
   let bound = false;
 
@@ -111,7 +112,9 @@ export const useSessionStore = defineStore("session", () => {
   }
 
   function pushMessage(kind: string, text: string) {
+    // 稳定 id 作 v-for key（批次⑫）：前插列表用 index key 每次前插都全列表重渲染
     messages.value.unshift({
+      id: ++msgSeq,
       ts: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
       kind,
       text,
