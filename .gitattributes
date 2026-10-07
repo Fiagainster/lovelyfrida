@@ -1,0 +1,11 @@
+# 批次⑮：行尾确定性——CI（windows-latest 检出可能转 CRLF）与本机验证环境（LF）
+# 必须逐字节一致，否则 cargo fmt --check 等检查不可复现。
+# 仓库内一律 LF；Shell 脚本强制 LF；Windows 专属脚本保持 CRLF。
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.png binary
+*.ico binary
+*.woff binary
+*.woff2 binary
