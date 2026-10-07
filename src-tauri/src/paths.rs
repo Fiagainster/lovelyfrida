@@ -57,15 +57,89 @@ pub fn bin_dir() -> PathBuf {
 /// 随包资源定位（文档10 P4-2 单安装包）：优先 app_root 直下（开发态/绿色布局）；
 /// NSIS 打包对 `../` 资源按 tauri-utils 规则落 `_up_\` 前缀目录，两级都查。
 pub fn resource_join(rel: &str) -> PathBuf {
-    let direct = app_root().join(rel);
+    resource_join_at(app_root(), rel)
+}
+
+/// 纯逻辑内核（批次⑭单测锚点）：两级定位语义的单一事实源。
+/// `_up_` 兜底曾是批次⑧出货级 bug 的根源（sidecar exe 多一层 dist 导致安装版
+/// 永远找不到）——这段逻辑必须有测试钉死，不许再靠真机才能发现回归。
+fn resource_join_at(base: &Path, rel: &str) -> PathBuf {
+    let direct = base.join(rel);
     if direct.exists() {
         return direct;
     }
-    let up = app_root().join("_up_").join(rel);
+    let up = base.join("_up_").join(rel);
     if up.exists() {
         return up;
     }
     direct // 不存在时返回直连路径，让调用方给出明确的缺失报错
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resource_join_直下优先() {
+        let base = std::env::temp_dir().join("lf-test-rj-direct");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("bin/adb/windows-x64")).unwrap();
+        std::fs::write(base.join("bin/adb/windows-x64/adb.exe"), b"x").unwrap();
+        let got = resource_join_at(&base, "bin/adb/windows-x64/adb.exe");
+        assert_eq!(
+            got,
+            base.join("bin/adb/windows-x64/adb.exe"),
+            "存在直下资源时必须返回直下路径"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn resource_join_up_兜底_批次8出货bug回归() {
+        let base = std::env::temp_dir().join("lf-test-rj-up");
+        let _ = std::fs::remove_dir_all(&base);
+        // NSIS 布局：../sidecar/frida_bridge.exe 落在 <install>/_up_/sidecar/
+        std::fs::create_dir_all(base.join("_up_/sidecar")).unwrap();
+        std::fs::write(base.join("_up_/sidecar/frida_bridge.exe"), b"x").unwrap();
+        let got = resource_join_at(&base, "sidecar/frida_bridge.exe");
+        assert_eq!(
+            got,
+            base.join("_up_/sidecar/frida_bridge.exe"),
+            "直下缺失时必须命中 _up_ 兜底（批次⑧语义）"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn resource_join_都不存在时返回直连路径供调用方报缺失() {
+        let base = std::env::temp_dir().join("lf-test-rj-none");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let got = resource_join_at(&base, "bin/adb/windows-x64/adb.exe");
+        assert_eq!(
+            got,
+            base.join("bin/adb/windows-x64/adb.exe"),
+            "缺失时返回直连路径（不返回 _up_ 路径）"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn resource_join_直下优先于_up_() {
+        let base = std::env::temp_dir().join("lf-test-rj-both");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("sidecar")).unwrap();
+        std::fs::create_dir_all(base.join("_up_/sidecar")).unwrap();
+        std::fs::write(base.join("sidecar/frida_bridge.exe"), b"direct").unwrap();
+        std::fs::write(base.join("_up_/sidecar/frida_bridge.exe"), b"up").unwrap();
+        let got = resource_join_at(&base, "sidecar/frida_bridge.exe");
+        assert_eq!(
+            got,
+            base.join("sidecar/frida_bridge.exe"),
+            "两级都存在时直下必须优先"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }
 
 pub fn bundled_adb_path() -> PathBuf {
