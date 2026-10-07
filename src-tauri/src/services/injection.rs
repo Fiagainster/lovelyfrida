@@ -45,6 +45,18 @@ pub async fn run(
     package: &str,
     files: &[InjectionFile],
 ) -> Result<InjectionReport, String> {
+    use crate::services::device_shell::{self, sq, su_c};
+    if !device_shell::valid_package(package) {
+        return Err(format!("包名不合法：{package}（仅允许字母/数字/点/下划线）"));
+    }
+    for f in files {
+        if !device_shell::valid_filename(&f.device_name) {
+            return Err(format!("文件名不合法：{}（不得含路径分隔符）", f.device_name));
+        }
+        if !f.device_dir.starts_with('/') {
+            return Err(format!("目标目录必须是设备绝对路径：{}", f.device_dir));
+        }
+    }
     let adb = AdbBackend::detect(&cfg.adb_path, &cfg.doctor.adb_extra_paths).await?;
     let devices = adb.devices().await?;
     let Some(serial) = devices.iter().find(|d| d.state == "device").map(|d| d.serial.clone())
@@ -99,7 +111,7 @@ pub async fn run(
     let mut dir_evidence: Vec<String> = Vec::new();
     for f in files {
         let dir = &f.device_dir;
-        let r = shell(&adb, &serial, &format!("su -c 'mkdir -p \"{dir}\"'")).await;
+        let r = shell(&adb, &serial, &su_c(&format!("mkdir -p {}", sq(dir)))).await;
         match r {
             Ok(_) => dir_evidence.push(format!("mkdir -p {dir} ✓")),
             Err(e) => {
@@ -136,7 +148,12 @@ pub async fn run(
                 let cp = shell(
                     &adb,
                     &serial,
-                    &format!("su -c 'cp \"{tmp}\" \"{target}\" && rm -f \"{tmp}\"'"),
+                    &su_c(&format!(
+                        "cp {} {} && rm -f {}",
+                        sq(&tmp),
+                        sq(&target),
+                        sq(&tmp)
+                    )),
                 )
                 .await;
                 match cp {
@@ -186,7 +203,8 @@ pub async fn run(
             if let Ok(content) = shell(
                 &adb,
                 &serial,
-                &format!("su -c 'cat /data/data/{package}/shared_prefs/{pf}'"),
+                // pf 来自设备 ls 输出，视为不可信输入（恶意 App 可造出带引号的 prefs 文件名）
+                &su_c(&format!("cat /data/data/{package}/shared_prefs/{}", sq(pf))),
             )
             .await
             {
@@ -227,7 +245,8 @@ pub async fn run(
                     let r = shell(
                         &adb,
                         &serial,
-                        &format!("su -c 'chown {uid}:{uid} \"{target}\"'"),
+                        // uid 已在上方按纯数字校验；target 含路径/文件名，走 sq 引用
+                        &su_c(&format!("chown {uid}:{uid} {}", sq(target))),
                     )
                     .await;
                     match r {
@@ -264,7 +283,7 @@ pub async fn run(
             let r = shell(
                 &adb,
                 &serial,
-                &format!("su -c 'restorecon \"{target}\" 2>/dev/null; echo done'"),
+                &su_c(&format!("restorecon {} 2>/dev/null; echo done", sq(target))),
             )
             .await;
             match r {
@@ -306,12 +325,7 @@ pub async fn run(
         .await
         .unwrap_or_default();
         let local_md5 = md5_hex(&local_bytes);
-        let remote = shell(
-            &adb,
-            &serial,
-            &format!("su -c 'md5sum \"{target}\"'"),
-            )
-            .await;
+        let remote = shell(&adb, &serial, &su_c(&format!("md5sum {}", sq(target)))).await;
         match remote {
             Ok(o) => {
                 let remote_md5 = o.stdout.split_whitespace().next().unwrap_or("").to_string();

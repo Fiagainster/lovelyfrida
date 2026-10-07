@@ -68,11 +68,20 @@ async fn write_device_file(
     f: &InjectionFile,
     content: &[u8],
 ) -> Result<(), String> {
+    use crate::services::device_shell::{sq, su_c};
+    // device_name 会拼进本机 %TEMP% 文件名，必须先拦下宿主侧穿越（批次⑩）
+    if !crate::services::device_shell::valid_filename(&f.device_name) {
+        return Err(format!("文件名不合法：{}（不得含路径分隔符）", f.device_name));
+    }
+    if !f.device_dir.starts_with('/') {
+        return Err(format!("目标目录必须是设备绝对路径：{}", f.device_dir));
+    }
     let local_tmp = std::env::temp_dir().join(format!("lf-exp-{}", f.device_name));
     std::fs::write(&local_tmp, content).map_err(|e| format!("写本地临时文件失败：{e}"))?;
     let target = format!("{}/{}", f.device_dir.trim_end_matches('/'), f.device_name);
     let tmp = format!("/data/local/tmp/lf-exp-{}", f.device_name);
-    adb.push(serial, local_tmp.to_str().unwrap(), &tmp, Duration::from_secs(120))
+    let local_tmp_str = local_tmp.to_str().ok_or("本机临时目录路径非 UTF-8")?;
+    adb.push(serial, local_tmp_str, &tmp, Duration::from_secs(120))
         .await
         .map_err(|e| format!("push 失败：{e}"))?;
     let uid_out = adb
@@ -85,9 +94,11 @@ async fn write_device_file(
     let uid = uid_out.stdout.trim().to_string();
     adb.shell(
         serial,
-        &format!(
-            "su -c 'cp \"{tmp}\" \"{target}\" && chown {uid}:{uid} \"{target}\" && restorecon \"{target}\" 2>/dev/null; rm -f \"{tmp}\"; echo ok'"
-        ),
+        &su_c(&format!(
+            "cp {a} {b} && chown {uid}:{uid} {b} && restorecon {b} 2>/dev/null; rm -f {a}; echo ok",
+            a = sq(&tmp),
+            b = sq(&target)
+        )),
         Duration::from_secs(30),
     )
     .await
@@ -104,6 +115,12 @@ pub async fn run(
     exp: ExperimentConfig,
     case_name: Option<String>,
 ) -> Result<ExperimentReport, String> {
+    if !crate::services::device_shell::valid_package(&exp.package) {
+        return Err(format!(
+            "包名不合法：{}（仅允许字母/数字/点/下划线）",
+            exp.package
+        ));
+    }
     let adb = AdbBackend::detect(&cfg.adb_path, &cfg.doctor.adb_extra_paths).await?;
     let devices = adb.devices().await?;
     let serial = devices
