@@ -1,21 +1,82 @@
 //! trace 管线（文档06）：probe_hit / probe_error / console 结构化事件
 //! 落 `cases/traces/run-<id>.jsonl`（行式追加，崩溃安全）+ 推前端时间轴。
 //! 大文件不进数据库（原则：SQLite 只存索引）。
+//!
+//! 写盘走专用线程（批次⑫，仿 audit.rs 样板）：on_agent_message 在 forward_events 的
+//! async 循环里同步执行——此前持 std Mutex 逐行 writeln 直接跑在 tokio worker 上，
+//! 事件洪峰（探针命中/压测 5000 事件/s）会阻塞整个 runtime。现在 enqueue 侧只做
+//! 序列化 + 入队（无 IO），落盘由 "trace-writer" 线程串行完成。
+//! 已知边界（记录在案）：行计数在入队侧累加；跨任务并发入队与 stop 的 Drain 信号
+//! 理论上存在乱序窗口（mpsc 跨发送者无全局序保证），最坏后果是 runs.line_count 差 1
+//! ——记录自带 run_id 字段可对账，取证读侧以文件为准。
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::mpsc::Sender;
+use std::sync::{Mutex, OnceLock};
 use tauri::Emitter;
 
 static SEQ: AtomicU64 = AtomicU64::new(0);
 
+/// 写线程消息：Line = 预序列化 jsonl 行（含换行）；Rotate = 切换到新 run 的文件句柄；
+/// Drain = stop 前的落盘确认（等在此之前的行全部写完再返回）。
+enum TraceWrite {
+    Line(String),
+    Rotate(std::fs::File),
+    Drain(Sender<()>),
+}
+
+static TRACE_TX: OnceLock<Sender<TraceWrite>> = OnceLock::new();
+
+fn trace_tx() -> &'static Sender<TraceWrite> {
+    TRACE_TX.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<TraceWrite>();
+        let builder = std::thread::Builder::new().name("trace-writer".into());
+        if let Err(e) = builder.spawn(move || trace_writer(rx)) {
+            tracing::error!("[trace] 写线程启动失败：{e}");
+        }
+        tx
+    })
+}
+
+fn trace_writer(rx: std::sync::mpsc::Receiver<TraceWrite>) {
+    let mut file: Option<std::fs::File> = None;
+    for msg in rx {
+        match msg {
+            TraceWrite::Line(line) => {
+                if let Some(f) = file.as_mut() {
+                    use std::io::Write;
+                    if let Err(e) = f.write_all(line.as_bytes()) {
+                        tracing::warn!("[trace] jsonl 写入失败（证据缺口，已留痕）：{e}");
+                    }
+                }
+            }
+            TraceWrite::Rotate(f) => file = Some(f),
+            TraceWrite::Drain(ack) => {
+                if let Some(f) = file.as_mut() {
+                    use std::io::Write;
+                    let _ = f.flush();
+                }
+                let _ = ack.send(());
+            }
+        }
+    }
+}
+
+/// stop 前的落盘确认：等写线程把已入队的行全部写完（本地文件毫秒级；2s 兜底防挂）。
+fn trace_drain() {
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    if trace_tx().send(TraceWrite::Drain(tx)).is_ok() {
+        let _ = rx.recv_timeout(std::time::Duration::from_secs(2));
+    }
+}
+
 pub struct RunState {
     pub id: String,
-    file: Mutex<std::fs::File>,
     /// cases.db runs 行 id（P2-3；None=未落库，trace 文件照常写）
     pub db_run_id: Option<i64>,
-    /// 已写入行数（stop 时回写 runs.line_count）
+    /// 已入队行数（stop 时回写 runs.line_count；写线程保证入队序 ≈ 落盘序）
     pub lines: AtomicU64,
 }
 
@@ -84,9 +145,11 @@ impl TraceState {
             return existing.id.clone();
         }
         if let Ok(f) = file {
+            // 写线程切换到新 run 的文件（此前入队、属于旧 run 的行由写线程串行
+            // 处理完 Rotate 之前的消息；记录自带 run_id 可对账归属）
+            let _ = trace_tx().send(TraceWrite::Rotate(f));
             *run = Some(RunState {
                 id: id.clone(),
-                file: Mutex::new(f),
                 db_run_id,
                 lines: AtomicU64::new(0),
             });
@@ -100,8 +163,11 @@ impl TraceState {
         let lines = run.lines.load(Ordering::SeqCst);
         let db_run_id = run.db_run_id;
         let ended = chrono::Local::now().to_rfc3339();
+        // Drain 放在 spawn_blocking 里：等写线程把已入队的行全部落盘后再回写
+        // line_count（本地文件毫秒级；同步等待是阻塞线程池，不是 async worker）
         let _ = tauri::async_runtime::spawn_blocking(move || {
-            crate::store::run_finish(db_run_id, lines, "done", &ended)
+            trace_drain();
+            crate::store::run_finish(db_run_id, lines, "done", &ended);
         })
         .await;
         Some(run.id)
@@ -137,13 +203,15 @@ fn build_record(run: &RunState, payload: Value) -> TraceRecord {
 }
 
 fn append_record(run: &RunState, rec: &TraceRecord) {
-    if let Ok(mut f) = run.file.lock() {
-        use std::io::Write;
-        if let Ok(line) = serde_json::to_string(rec) {
-            if writeln!(f, "{line}").is_ok() {
-                run.lines.fetch_add(1, Ordering::SeqCst);
-            }
+    // 入队即计数（写线程保证串行落盘；写入失败留 warn 留痕）——
+    // 此前在 tokio worker 上同步 writeln，事件洪峰阻塞 runtime（批次⑫）
+    run.lines.fetch_add(1, Ordering::SeqCst);
+    match serde_json::to_string(rec) {
+        Ok(mut line) => {
+            line.push('\n');
+            let _ = trace_tx().send(TraceWrite::Line(line));
         }
+        Err(e) => tracing::warn!("[trace] 记录序列化失败（证据缺口）：{e}"),
     }
 }
 
