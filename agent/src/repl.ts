@@ -13,9 +13,12 @@ export function evaluate(code: string): ReplResult {
   const hoisted = code.replace(/^\s*(let|const)\s+/gm, "var ");
   let result: unknown;
   try {
+    // 间接 eval：不继承调用方严格性（esbuild 产物整体严格模式），在全局作用域以
+    // 非严格模式执行 → var 声明落 globalThis，跨调用持久。
+    // 此前 new Function('"use strict"; …eval(…)') 是 strict direct eval，有独立变量
+    // 环境，var 根本出不了当次调用，跨调用必 ReferenceError（批次⑩修复，有回归测试）。
     // eslint-disable-next-line @typescript-eslint/no-implied-eval
-    const fn = new Function(`"use strict"; return (function(){ return eval(${JSON.stringify(hoisted)}); }).call(this);`);
-    result = fn.call(globalThis);
+    result = (0, eval)(hoisted);
   } catch (e) {
     return { value: { k: "err", v: String(e) }, blob_b64: null };
   }
