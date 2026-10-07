@@ -162,9 +162,9 @@ onMounted(() => {
       <div ref="bodyEl" class="term-drawer__body">
         <div
           v-for="s in store.sessions"
-          :key="s.id"
           v-show="store.activeId === s.id"
           :id="`term-${s.id}`"
+          :key="s.id"
           class="term-mount"
         />
         <div v-if="store.sessions.length === 0" class="term-empty">

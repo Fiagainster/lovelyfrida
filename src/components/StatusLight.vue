@@ -14,7 +14,7 @@ const props = withDefaults(
     size?: number;
     showText?: boolean;
   }>(),
-  { size: 10, showText: false },
+  { text: '', size: 10, showText: false },
 );
 
 const TEXTS: Record<CheckStatus, string> = {

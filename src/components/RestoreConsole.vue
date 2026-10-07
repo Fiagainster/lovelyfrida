@@ -152,11 +152,11 @@ async function onGenC() {
         <StatusLight :status="recResult.selfTestPassed ? 'pass' : 'warn'" show-text />
         <b class="mono">{{ recResult.humanDesc }}</b>
       </div>
-      <div class="scheme-line" v-if="recResult.hashcatMode">
+      <div v-if="recResult.hashcatMode" class="scheme-line">
         <NTag size="small" type="success" :bordered="false">hashcat 有模式</NTag>
         <code class="mono" style="font-size: 11px">{{ recResult.hashcatCmd }}</code>
       </div>
-      <div class="scheme-line" v-else>
+      <div v-else class="scheme-line">
         <NTag size="small" type="warning" :bordered="false">无现成 hashcat 模式</NTag>
         <span class="muted" style="font-size: 12px">→ 用下方「生成 C 骨架」（writeup 路线）</span>
       </div>

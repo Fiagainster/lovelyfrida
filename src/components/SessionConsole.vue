@@ -242,10 +242,10 @@ onMounted(() => {
       >
         <template #prefix><SearchOutline /></template>
       </NInput>
-      <NTag size="small" :bordered="false" :type="tab === 'user' ? 'info' : 'default'" @click="tab = 'user'" style="cursor: pointer">
+      <NTag size="small" :bordered="false" :type="tab === 'user' ? 'info' : 'default'" style="cursor: pointer" @click="tab = 'user'">
         用户应用
       </NTag>
-      <NTag size="small" :bordered="false" :type="tab === 'system' ? 'warning' : 'default'" @click="tab = 'system'" style="cursor: pointer">
+      <NTag size="small" :bordered="false" :type="tab === 'system' ? 'warning' : 'default'" style="cursor: pointer" @click="tab = 'system'">
         系统进程
       </NTag>
       <span class="muted">共 {{ session.processes.length }} 条</span>

@@ -88,12 +88,12 @@ async function save() {
 <template>
   <NModal
     :show="props.show"
-    @update:show="emit('update:show', $event)"
     preset="card"
     title="设置"
     style="width: 680px"
     :bordered="false"
     size="small"
+    @update:show="emit('update:show', $event)"
   >
     <div v-if="draft" class="settings-body">
       <section class="settings-section">
