@@ -4,102 +4,11 @@
 用可自证的样本：SHA-256('5937'+'somesalt') 与 SHA-256('5938'+'somesalt')。
 还原应穷举出「SHA-256 / 明文‖盐 / 单轮 / hex」；爆破填 ?d?d?d?d 应 HIT pwd=5937。
 """
-import hashlib
-import json
 import sys
+import hashlib
 import time
-import urllib.request
 
-import websocket
-
-
-def get_ws():
-    last = None
-    for host in ("127.0.0.1", "[::1]"):
-        try:
-            data = json.load(urllib.request.urlopen(f"http://{host}:9223/json", timeout=5))
-            for t in data:
-                if t.get("type") == "page" and "LovelyFrida" in t.get("title", ""):
-                    return t["webSocketDebuggerUrl"]
-        except Exception as e:  # noqa: BLE001
-            last = e
-    raise RuntimeError(f"CDP 未就绪: {last}")
-
-
-def js(expression, timeout=90):
-    ws = websocket.create_connection(get_ws(), timeout=timeout)
-    try:
-        ws.send(json.dumps({"id": 1, "method": "Runtime.evaluate",
-                            "params": {"expression": expression, "returnByValue": True,
-                                       "awaitPromise": True}}))
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            m = json.loads(ws.recv())
-            if m.get("id") == 1:
-                r = m.get("result", {})
-                if r.get("exceptionDetails"):
-                    raise RuntimeError(json.dumps(r["exceptionDetails"], ensure_ascii=False)[:300])
-                return r.get("result", {}).get("value")
-        raise TimeoutError(expression[:80])
-    finally:
-        ws.close()
-
-
-def wait(expr, timeout_s, desc):
-    deadline = time.time() + timeout_s
-    last = None
-    while time.time() < deadline:
-        try:
-            last = js(expr, timeout=15)
-            if last:
-                return last
-        except Exception as e:  # noqa: BLE001
-            last = f"eval-error: {str(e)[:150]}"
-        time.sleep(1.5)
-    raise TimeoutError(f"{desc}（{str(last)[:200]}）")
-
-
-def click_button(text):
-    r = js(f"""(() => {{
-      const b = [...document.querySelectorAll('button')].find(b => b.innerText.includes('{text}'));
-      if (b) {{ b.click(); return 'clicked'; }}
-      return 'not-found';
-    }})()""")
-    if r != "clicked":
-        raise RuntimeError(f"按钮「{text}」未找到（{r}）")
-    return r
-
-
-def fill_sample(idx, plaintext, salt, target):
-    # 三列输入共享 placeholder，按行内顺序定位第 idx 行（0 起）
-    return js(rf"""(() => {{
-      const rows = [...document.querySelectorAll('table tbody tr')].filter(tr => tr.innerText.includes('样本'));
-      if (rows.length <= {idx}) return 'row-missing';
-      const inputs = [...rows[{idx}].querySelectorAll('input')];
-      if (inputs.length < 3) return 'inputs-missing';
-      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-      setter.call(inputs[0], '{plaintext}');
-      inputs[0].dispatchEvent(new Event('input', {{ bubbles: true }}));
-      setter.call(inputs[1], '{salt}');
-      inputs[1].dispatchEvent(new Event('input', {{ bubbles: true }}));
-      setter.call(inputs[2], '{target}');
-      inputs[2].dispatchEvent(new Event('input', {{ bubbles: true }}));
-      return 'filled';
-    }})()""")
-
-
-def fill_brute(mask, salt, pwd):
-    return js(rf"""(() => {{
-      const find = (needle, v) => {{
-        const inp = [...document.querySelectorAll('input')].find(i => (i.placeholder || '').includes(needle));
-        if (!inp) return 'missing:' + needle;
-        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-        setter.call(inp, v);
-        inp.dispatchEvent(new Event('input', {{ bubbles: true }}));
-        return 'filled';
-      }};
-      return [find('掩码', '{mask}'), find('盐（同还原时）', '{salt}'), find('自测明文', '{pwd}')].join(',');
-    }})()""")
+from cdp_common import click_button, fill_by_placeholder, js, shot, wait
 
 
 def main():

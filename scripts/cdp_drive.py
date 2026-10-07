@@ -4,84 +4,10 @@
 前置：应用以 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--remote-debugging-port=9223" 启动。
 CDP 监听在 [::1]:9223（IPv6）。截图输出到 logs/ui_shots/。
 """
-import base64
-import json
 import sys
 import time
-import urllib.request
-from pathlib import Path
 
-import websocket
-
-SHOTS = Path(__file__).resolve().parent.parent / "logs" / "ui_shots"
-SHOTS.mkdir(parents=True, exist_ok=True)
-
-
-def cdp_http(path):
-    last = None
-    for host in ("127.0.0.1", "[::1]"):
-        try:
-            return json.load(urllib.request.urlopen(f"http://{host}:9223{path}", timeout=5))
-        except Exception as e:  # noqa: BLE001
-            last = e
-    raise last
-
-
-def page_ws():
-    for t in cdp_http("/json"):
-        if t.get("type") == "page" and "LovelyFrida" in t.get("title", ""):
-            return t["webSocketDebuggerUrl"]
-    raise RuntimeError("未找到 LovelyFrida 页面目标")
-
-
-class CDP:
-    def __init__(self, url):
-        self.ws = websocket.create_connection(url, timeout=60)
-        self.n = 0
-
-    def call(self, method, **params):
-        self.n += 1
-        self.ws.send(json.dumps({"id": self.n, "method": method, "params": params}))
-        deadline = time.time() + 120
-        while time.time() < deadline:
-            msg = json.loads(self.ws.recv())
-            if msg.get("id") == self.n:
-                if "error" in msg:
-                    raise RuntimeError(f"{method}: {msg['error']}")
-                return msg.get("result", {})
-        raise TimeoutError(method)
-
-    def js(self, expression, await_promise=True):
-        r = self.call(
-            "Runtime.evaluate",
-            expression=expression,
-            returnByValue=True,
-            awaitPromise=await_promise,
-        )
-        if r.get("exceptionDetails"):
-            raise RuntimeError(json.dumps(r["exceptionDetails"], ensure_ascii=False)[:400])
-        return r.get("result", {}).get("value")
-
-    def shot(self, name):
-        data = self.call("Page.captureScreenshot", format="png")["data"]
-        p = SHOTS / f"{name}.png"
-        p.write_bytes(base64.b64decode(data))
-        print(f"   [截图] {p.name}")
-
-
-def wait_js(cdp, expr, timeout_s, desc):
-    """轮询 JS 表达式直到真值"""
-    deadline = time.time() + timeout_s
-    last = None
-    while time.time() < deadline:
-        try:
-            last = cdp.js(expr)
-            if last:
-                return last
-        except Exception as e:  # noqa: BLE001
-            last = f"eval-error: {e}"
-        time.sleep(1.0)
-    raise TimeoutError(f"{desc} 超时（最后值：{str(last)[:200]}）")
+from cdp_common import CDP, page_ws, wait_js
 
 
 def main():

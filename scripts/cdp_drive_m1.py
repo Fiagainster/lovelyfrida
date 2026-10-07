@@ -1,93 +1,9 @@
 #!/usr/bin/env python3
 """M1 验收（健壮版）：每次求值独立建立 CDP 连接，避免长连接状态漂移。"""
-import base64
-import json
 import sys
 import time
-import urllib.request
-from pathlib import Path
 
-import websocket
-
-SHOTS = Path(__file__).resolve().parent.parent / "logs" / "ui_shots"
-SHOTS.mkdir(parents=True, exist_ok=True)
-
-
-def get_ws():
-    last = None
-    for host in ("127.0.0.1", "[::1]"):
-        try:
-            data = json.load(urllib.request.urlopen(f"http://{host}:9223/json", timeout=5))
-            for t in data:
-                if t.get("type") == "page" and "LovelyFrida" in t.get("title", ""):
-                    return t["webSocketDebuggerUrl"]
-        except Exception as e:  # noqa: BLE001
-            last = e
-    raise RuntimeError(f"CDP 未就绪: {last}")
-
-
-def js(expression, timeout=60):
-    """单次连接执行一个表达式（awaitPromise）"""
-    ws = websocket.create_connection(get_ws(), timeout=timeout)
-    try:
-        ws.send(json.dumps({"id": 1, "method": "Runtime.evaluate",
-                            "params": {"expression": expression, "returnByValue": True,
-                                       "awaitPromise": True}}))
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            raw = ws.recv()
-            if not raw:
-                continue
-            m = json.loads(raw)
-            if m.get("id") == 1:
-                r = m.get("result", {})
-                if r.get("exceptionDetails"):
-                    raise RuntimeError(json.dumps(r["exceptionDetails"], ensure_ascii=False)[:300])
-                return r.get("result", {}).get("value")
-        raise TimeoutError(expression[:80])
-    finally:
-        ws.close()
-
-
-def shot(name):
-    ws = websocket.create_connection(get_ws(), timeout=60)
-    try:
-        ws.send(json.dumps({"id": 9, "method": "Page.captureScreenshot", "params": {"format": "png"}}))
-        deadline = time.time() + 30
-        while time.time() < deadline:
-            m = json.loads(ws.recv())
-            if m.get("id") == 9:
-                p = SHOTS / f"{name}.png"
-                p.write_bytes(base64.b64decode(m["result"]["data"]))
-                print(f"   [截图] {p.name}")
-                return
-    finally:
-        ws.close()
-
-
-def wait(expr, timeout_s, desc):
-    deadline = time.time() + timeout_s
-    last = None
-    while time.time() < deadline:
-        try:
-            last = js(expr, timeout=10)
-            if last:
-                return last
-        except Exception as e:  # noqa: BLE001
-            last = f"eval-error: {str(e)[:120]}"
-        time.sleep(1.5)
-    raise TimeoutError(f"{desc}（{str(last)[:200]}）")
-
-
-def click_button(text):
-    r = js(f"""(() => {{
-      const b = [...document.querySelectorAll('button')].find(b => b.innerText.includes('{text}'));
-      if (b) {{ b.click(); return 'clicked'; }}
-      return 'not-found';
-    }})()""")
-    if r != "clicked":
-        raise RuntimeError(f"按钮「{text}」未找到")
-    return r
+from cdp_common import click_button, js, shot, wait
 
 
 def main():
