@@ -64,6 +64,20 @@ fn trace_writer(rx: std::sync::mpsc::Receiver<TraceWrite>) {
     }
 }
 
+/// dex dump 文件名白名单（批次⑮防御纵深）：base 来自 agent payload，清洗 `0x` 前缀后
+/// 只允许十六进制字符——`..`/路径分隔符不得越出 dumps 目录（agent 是第一方，
+/// 但证据文件名规则必须自证，配单测）。
+fn dex_dump_filename(base: &str) -> Option<String> {
+    let cleaned = base
+        .trim()
+        .trim_start_matches("0x")
+        .trim_start_matches("0X");
+    if cleaned.is_empty() || !cleaned.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(format!("dex-{cleaned}.dex"))
+}
+
 /// stop 前的落盘确认：等写线程把已入队的行全部写完（本地文件毫秒级；2s 兜底防挂）。
 fn trace_drain() {
     let (tx, rx) = std::sync::mpsc::channel::<()>();
@@ -292,13 +306,16 @@ pub fn on_agent_message(
             .and_then(|v| v.as_str())
             .unwrap_or("unknown")
             .to_string();
+        let Some(fname) = dex_dump_filename(&base) else {
+            tracing::warn!("[dex] 非法的 base 标识 {base:?}——拒绝落盘（文件名白名单）");
+            return;
+        };
         tauri::async_runtime::spawn_blocking(move || {
             let dir = {
                 let c = crate::config::get();
                 crate::paths::cases_root(&c).join("dumps")
             };
             let _ = std::fs::create_dir_all(&dir);
-            let fname = format!("dex-{}.dex", base.replace("0x", ""));
             let path = dir.join(&fname);
             if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&data) {
                 if std::fs::write(&path, &bytes).is_ok() {
@@ -450,5 +467,31 @@ mod tests {
     fn seq_无aseq字段的事件直接跳过() {
         let st = TraceState::default();
         assert!(check_agent_seq(&st, 1, &json!({"t": "hello"})).is_none());
+    }
+}
+
+#[cfg(test)]
+mod dex_name_tests {
+    use super::dex_dump_filename;
+
+    #[test]
+    fn dex_文件名_常规十六进制地址() {
+        assert_eq!(
+            dex_dump_filename("0x7f1234ab"),
+            Some("dex-7f1234ab.dex".into())
+        );
+        assert_eq!(
+            dex_dump_filename("7F1234AB"),
+            Some("dex-7F1234AB.dex".into())
+        );
+    }
+
+    #[test]
+    fn dex_文件名_路径穿越与非法字符拒绝() {
+        assert_eq!(dex_dump_filename("../../etc/passwd"), None);
+        assert_eq!(dex_dump_filename("..\\..\\evil"), None);
+        assert_eq!(dex_dump_filename("0xZZ; rm -rf"), None);
+        assert_eq!(dex_dump_filename(""), None);
+        assert_eq!(dex_dump_filename("0x"), None, "清洗后为空必须拒绝");
     }
 }

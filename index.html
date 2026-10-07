@@ -4,17 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>LovelyFrida</title>
-    <script>
-      // 内联启动着色：消除白屏与主题闪烁（LovelyMem 模式）
-      (function () {
-        try {
-          var t = localStorage.getItem("lf.theme") || "dark";
-          document.documentElement.setAttribute("data-theme", t);
-        } catch (e) {
-          document.documentElement.setAttribute("data-theme", "dark");
-        }
-      })();
-    </script>
+    <script src="/theme-boot.js"></script>
   </head>
   <body>
     <div id="app"></div>
