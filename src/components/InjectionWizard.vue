@@ -11,12 +11,16 @@ const pkg = ref("com.example.app");
 const running = ref(false);
 const report = ref<InjectionReport | null>(null);
 
-const files = reactive<InjectionFile[]>([
-  { localPath: "", deviceDir: "/data/data/com.example.app/files", deviceName: "password.json" },
+// 行级稳定 key（批次⑫）：可 splice 删除的行用 index 作 key 时，删中间行会按位
+// 复用组件实例——聚焦态/IME 组合态错位。_key 只在前端区分行，发送前剥掉。
+type FileRow = InjectionFile & { _key: number };
+let rowSeq = 0;
+const files = reactive<FileRow[]>([
+  { _key: ++rowSeq, localPath: "", deviceDir: "/data/data/com.example.app/files", deviceName: "password.json" },
 ]);
 
 function addFile() {
-  files.push({ localPath: "", deviceDir: files[0]?.deviceDir ?? "/data/data/", deviceName: "" });
+  files.push({ _key: ++rowSeq, localPath: "", deviceDir: files[0]?.deviceDir ?? "/data/data/", deviceName: "" });
 }
 function removeFile(i: number) {
   files.splice(i, 1);
@@ -30,7 +34,9 @@ function applyProfile(pk: string, dir: string) {
 defineExpose({ applyProfile });
 
 async function onRun() {
-  const valid = files.filter((f) => f.localPath.trim() && f.deviceDir.trim() && f.deviceName.trim());
+  const valid = files
+    .filter((f) => f.localPath.trim() && f.deviceDir.trim() && f.deviceName.trim())
+    .map(({ _key, ...f }) => f);
   if (!pkg.value.trim() || valid.length === 0) {
     message.warning("包名和至少一个完整文件行（本地路径/目标目录/文件名）都要填");
     return;
@@ -64,7 +70,7 @@ async function onRun() {
         <tr><th>本地文件路径</th><th>设备目标目录</th><th>目标文件名</th><th style="width: 50px" /></tr>
       </thead>
       <tbody>
-        <tr v-for="(f, i) in files" :key="i">
+        <tr v-for="(f, i) in files" :key="f._key">
           <td><NInput v-model:value="f.localPath" size="small" placeholder="D:\\evidence\\...\\password.json" /></td>
           <td><NInput v-model:value="f.deviceDir" size="small" placeholder="/data/data/<pkg>/files" /></td>
           <td><NInput v-model:value="f.deviceName" size="small" placeholder="password.json" /></td>

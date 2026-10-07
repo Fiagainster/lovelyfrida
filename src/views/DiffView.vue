@@ -20,9 +20,12 @@ const cfg = reactive({
   waitS: 8,
 });
 const selectedProbe = computed(() => probe.probes.find((p) => p.id === cfg.probeId));
-const templates = reactive<ExperimentTemplate[]>([
-  { name: "组1", content: "" },
-  { name: "组2", content: "" },
+// 行级稳定 key（批次⑫）：同 InjectionWizard——可删行不得用 index 作 key
+type TemplateRow = ExperimentTemplate & { _key: number };
+let rowSeq = 0;
+const templates = reactive<TemplateRow[]>([
+  { _key: ++rowSeq, name: "组1", content: "" },
+  { _key: ++rowSeq, name: "组2", content: "" },
 ]);
 const running = ref(false);
 const report = ref<ExperimentReport | null>(null);
@@ -37,7 +40,7 @@ const probeOptions = computed(() =>
 const needSession = computed(() => session.session?.phase !== "running");
 
 function addTemplate() {
-  templates.push({ name: `组${templates.length + 1}`, content: "" });
+  templates.push({ _key: ++rowSeq, name: `组${templates.length + 1}`, content: "" });
 }
 
 async function onRun() {
@@ -62,7 +65,9 @@ async function onRun() {
         captureRet: true,
       },
       waitS: cfg.waitS,
-      templates: templates.filter((t) => t.name.trim()),
+      templates: templates
+        .filter((t) => t.name.trim())
+        .map(({ _key, ...t }) => t),
     }, useCaseStore().apiCaseName());
     message.success(`实验完成：${report.value.observations.length} 组观测`);
   } catch (e) {
@@ -141,7 +146,7 @@ const candidates = computed(() => {
         <tr><th style="width: 90px">组名</th><th>文件内容（变量）</th><th style="width: 50px" /></tr>
       </thead>
       <tbody>
-        <tr v-for="(t, i) in templates" :key="i">
+        <tr v-for="(t, i) in templates" :key="t._key">
           <td><NInput v-model:value="t.name" size="small" /></td>
           <td>
             <NInput
