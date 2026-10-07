@@ -614,6 +614,26 @@ async fn wait_hello(
                     if *sid == script_id && kind == "send" {
                         if let Some(t) = payload.as_ref().and_then(|p| p.get("t")).and_then(|t| t.as_str()) {
                             if t == "hello" {
+                                // agent 协议版本对账（批次⑪④）：core.js 内嵌于 Rust 二进制、
+                                // sidecar exe 独立分发，升级节奏不同——错配此前只会以字段缺失
+                                // 静默劣化。软检查不阻断，但必须在日志与会话事件流里明示。
+                                match payload
+                                    .as_ref()
+                                    .and_then(|p| p.get("proto"))
+                                    .and_then(|v| v.as_u64())
+                                {
+                                    Some(v) if v == crate::backends::frida::AGENT_PROTO_VERSION => {}
+                                    Some(other) => {
+                                        tracing::warn!("[session] agent proto={other} 高于宿主支持的 {}——未知字段将被忽略", crate::backends::frida::AGENT_PROTO_VERSION);
+                                        let mut s = state.session.lock().await;
+                                        push_ev(&mut s, format!("⚠ agent 协议版本 proto={other} 高于宿主支持的 {}，建议同步升级", crate::backends::frida::AGENT_PROTO_VERSION));
+                                    }
+                                    None => {
+                                        tracing::warn!("[session] agent 未上报 proto 版本（旧版 core.js？）");
+                                        let mut s = state.session.lock().await;
+                                        push_ev(&mut s, "⚠ agent 未上报协议版本（旧版 core.js？），新事件类型可能无法落证据".to_string());
+                                    }
+                                }
                                 // 三段式持锁：spawn_blocking 落库与 trace.start（内部也有
                                 // spawn_blocking）都不得持 session 锁跨 await——否则
                                 // frida_session_status/frida_rpc/detach 全部阻塞在锁上
@@ -803,8 +823,23 @@ pub async fn forward_events(
             loop {
                 match rx.recv().await {
                     Ok(ev) => {
-                        if let FridaEvent::Message { script_id, payload, data_b64, .. } = &ev {
-                            crate::services::trace::on_agent_message(&handle, &trace, payload.as_ref().unwrap_or(&Value::Null), *script_id, data_b64);
+                        let mut agent_error_payload: Option<Value> = None;
+                        if let FridaEvent::Message { script_id, kind, payload, data_b64, description, stack, .. } = &ev {
+                            // agent 脚本级异常（kind=error 时 payload=None，description/stack
+                            // 承载详情）此前不落证据文件——崩溃只活在 UI 实时流里（批次⑪②）：
+                            // 合成 agent_error 记录进 trace 管线，证据链补上这一段
+                            if kind == "error" && payload.is_none() {
+                                agent_error_payload = Some(serde_json::json!({
+                                    "t": "agent_error",
+                                    "script_id": script_id,
+                                    "description": description,
+                                    "stack": stack,
+                                }));
+                            }
+                            let payload_ref = agent_error_payload
+                                .as_ref()
+                                .unwrap_or(payload.as_ref().unwrap_or(&Value::Null));
+                            crate::services::trace::on_agent_message(&handle, &trace, payload_ref, *script_id, data_b64);
                         }
                         // 大包不进 webview：data_b64 只属于 trace 管线（dex 落盘后有
                         // dex-dumped 事件），MB 级 base64 走 IPC 会把 webview 打卡

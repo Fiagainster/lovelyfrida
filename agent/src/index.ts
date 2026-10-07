@@ -56,6 +56,8 @@ function helloPayload(): Record<string, unknown> {
   const ji = javaInfo();
   return {
     t: "hello",
+    // agent 消息协议版本（批次⑪④；宿主常量 AGENT_PROTO_VERSION 对账）
+    proto: 1,
     frida: Frida.version,
     runtime: Script.runtime,
     pid: Process.id,

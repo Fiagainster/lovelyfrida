@@ -59,6 +59,11 @@ def _next_id() -> int:
         return SEQ["n"]
 
 
+# 桥协议版本（批次⑪④）：ready 事件与 m_hello 都上报，宿主在入口处对账。
+# 1.1 = 25s 结构化超时 / 工作池 / 弃管回滚 / op_late 事件
+BRIDGE_VERSION = "1.1"
+
+
 def emit(obj) -> None:
     OUT.put(obj)
 
@@ -114,7 +119,7 @@ def m_hello(params):
     return {
         "frida": frida.__version__,
         "python": sys.version.split()[0],
-        "bridge": "1.1",
+        "bridge": BRIDGE_VERSION,
     }
 
 
@@ -461,7 +466,7 @@ def _cleanup() -> None:
 
 def main() -> None:
     threading.Thread(target=writer_loop, daemon=True).start()
-    notify("ready", {"frida": frida.__version__})
+    notify("ready", {"frida": frida.__version__, "bridge": BRIDGE_VERSION})
     try:
         for line in sys.stdin:
             line = line.strip()

@@ -15,6 +15,13 @@ use tokio::time::Duration;
 /// 注入 agent 源码（构建期内嵌，运行期零外部文件依赖）
 pub const CORE_AGENT_JS: &str = include_str!("../../../agent/dist/core.js");
 
+/// 协议版本锚点（批次⑪④）：core.js 内嵌于 Rust 二进制、sidecar exe 独立分发，
+/// 升级节奏不同——版本错配此前只会以字段缺失静默劣化，入口处对账明示。
+/// agent 消息协议版本（agent hello 的 proto 字段）
+pub const AGENT_PROTO_VERSION: u64 = 1;
+/// sidecar 桥协议版本（frida_bridge.py 的 bridge 字段；1.1 = 超时/弃管回滚/op_late）
+pub const SIDECAR_BRIDGE_VERSION: &str = "1.1";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event", content = "params", rename_all = "snake_case")]
 pub enum FridaEvent {
@@ -245,6 +252,18 @@ async fn spawn_sidecar(launch: &crate::paths::SidecarLaunch) -> Result<Arc<Sidec
                         }
                     }
                     Some("event") => {
+                        // sidecar 桥协议版本对账（批次⑪④）：ready 事件即对账点，进程级一次
+                        if v.get("event").and_then(|e| e.as_str()) == Some("ready") {
+                            match v.pointer("/params/bridge").and_then(|b| b.as_str()) {
+                                Some(b) if b == SIDECAR_BRIDGE_VERSION => {}
+                                Some(other) => tracing::warn!(
+                                    "[通道B] sidecar bridge 协议版本 {other} ≠ 宿主支持的 {SIDECAR_BRIDGE_VERSION}——25s 结构化超时/弃管回滚/op_late 等新语义可能缺失"
+                                ),
+                                None => tracing::warn!(
+                                    "[通道B] sidecar 未上报 bridge 版本（旧版 frida_bridge？），请求生命周期语义按 1.0 处理"
+                                ),
+                            }
+                        }
                         if let Ok(ev) = serde_json::from_value::<FridaEvent>(v) {
                             let _ = events_tx.send(ev);
                         }
