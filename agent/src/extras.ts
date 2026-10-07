@@ -270,20 +270,25 @@ export function watchSsl(
               return null;
             }
           })();
+          if (sslWatches.size === 0) return; /* listener 残留防御 */
+          // 每 watch 计数照旧；事件只发一条（watches 数组承载归属）——
+          // 此前 N 个 watch 发 N 条同 buffer 事件，高频 SSL_read 下序列化与 IPC 全是 N 倍放大（批次⑫）
+          const watches: string[] = [];
           sslWatches.forEach((st, wid) => {
             st.hits++;
-            send(
-              {
-                t: "ssl_data",
-                watch: wid,
-                fn: this._fn,
-                len,
-                thread: Process.getCurrentThreadId(),
-                preview,
-              },
-              buf,
-            );
+            watches.push(wid);
           });
+          send(
+            {
+              t: "ssl_data",
+              watches,
+              fn: this._fn,
+              len,
+              thread: Process.getCurrentThreadId(),
+              preview,
+            },
+            buf,
+          );
         },
       });
       sslListeners.set(fn, listener);
