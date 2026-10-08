@@ -5,7 +5,7 @@
   try {
     var t = localStorage.getItem("lf.theme") || "dark";
     document.documentElement.setAttribute("data-theme", t);
-  } catch (e) {
+  } catch {
     document.documentElement.setAttribute("data-theme", "dark");
   }
 })();

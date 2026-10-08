@@ -36,13 +36,16 @@ jobs:
 
       - name: agent 构建（先于 cargo：frida.rs include_str! 内嵌 dist/core.js）
         working-directory: agent
+        shell: bash
         run: |
           npm ci
           npm run check
           npm test
           npm run build
 
+      # shell: bash：pwsh 对多行 run 的中间命令失败不中断（eslint 红了步骤却标绿的坑）
       - name: 前端 lint + 测试 + 类型检查 + 构建
+        shell: bash
         run: |
           npm ci
           npm run lint
@@ -102,8 +105,8 @@ jobs:
       - name: ① sidecar exe（PyInstaller onefile）
         run: python scripts/build_sidecar.py
 
-      - name: ② NSIS 安装包
-        run: npx tauri build
+      - name: ② NSIS 安装包（资源清单在 bundle overlay：随包二进制已由上一步供给）
+        run: npx tauri build --config src-tauri/tauri.bundle.conf.json
 
       - name: 生成 sha256 清单
         shell: bash

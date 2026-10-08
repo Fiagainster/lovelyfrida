@@ -84,11 +84,14 @@ cd src-tauri && cargo check
 
 ```bash
 python scripts/build_sidecar.py   # ① 通道B sidecar exe（PyInstaller onefile，捆绑 frida 客户端）
-npx tauri build                   # ② NSIS 安装包（默认瘦身：随包 adb + sidecar，实测约 65MB）
+npx tauri build --config src-tauri/tauri.bundle.conf.json
+#                                 ② NSIS 安装包（默认瘦身：随包 adb + sidecar，实测约 65MB）
+# 随包资源清单独立在 bundle overlay：cargo check/test/clippy 不要求随包二进制存在（CI 免供给），
+# 只有打包（tauri build）时才需要它们在位
 ```
 
 **分发形态（C1，2026-10 拍板：默认瘦身）**：默认安装包**不随包 frida-server 矩阵**；首启后用体检页「下载 frida-server」按钮按 binary_manifest.json 登记的 sha256 对账下载到工作区（**首启需网络**，之后全功能离线）。需要「零联网、全量随包」的交付场景用：
-`npx tauri build --config src-tauri/tauri.full.conf.json`（四 ABI 矩阵全随包，约 250MB）。
+`npx tauri build --config src-tauri/tauri.full.conf.json`（四 ABI 矩阵全随包，约 250MB；full overlay 自带完整资源清单）。
 
 **签名（内部测试可用自签证书）**：`powershell -ExecutionPolicy Bypass -File scripts/sign_installer.ps1 <安装包>`；脚本头注释含证书准备（自签消除「无发布者」提示，正式分发用 CA 证书）。FR-02 首启对账对按需模式有明确容错（矩阵目录整体缺失时记「按需下载模式」而非失败）。
 

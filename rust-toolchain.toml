@@ -1,8 +1,7 @@
-# 工具链锚定（批次⑮）：CI 首跑暴露的教训——GitHub 拉的 "latest stable" 可能比
+# 工具链锚定（批次⑮）：CI 首跑暴露的教训——GitHub 拉的 latest stable 可能比
 # 本机验证用的版本新出新 clippy lint / rustfmt 规则，导致「本地全绿、CI 红灯」。
 # 全代码库在 1.92.0 上验证（fmt/clippy -D warnings/45 测试全绿），升级须伴随
 # lint 基线复跑，而不是被动接受流水线变红。
+# 注意：不写 profile/components——避免 rustup 把 1.92.0-<profile> 当作独立工具链重复下载。
 [toolchain]
 channel = "1.92.0"
-profile = "minimal"
-components = ["rustfmt", "clippy"]

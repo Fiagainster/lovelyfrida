@@ -34,13 +34,6 @@
     ],
     "icon": [
       "icons/icon.ico"
-    ],
-    "resources": [
-      "../bin/adb/windows-x64/adb.exe",
-      "../bin/adb/windows-x64/AdbWinApi.dll",
-      "../bin/adb/windows-x64/AdbWinUsbApi.dll",
-      "../bin/binary_manifest.json",
-      "../sidecar/frida_bridge.exe"
     ]
   }
 }
